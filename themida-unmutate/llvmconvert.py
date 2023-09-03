@@ -1184,6 +1184,22 @@ class LLVMFunction(object):
                 self.update_cache(expr, ret)
 
                 return ret
+            
+            if op == "call_func_ret":
+                loc_db = self.llvm_context.lifter.loc_db
+                fn_addr = loc_db.get_location_offset(expr.args[0].loc_key)
+
+                # Create a call instruction
+                func_name = "sub_%s" % hex(fn_addr)
+                fn = self.mod.get_global(func_name)
+                
+                fn_arg1 = builder.inttoptr(builder.load(self.get_ptr_by_expr(ExprId("RCX", 64))), llvm_ir.PointerType(llvm_ir.IntType(8)))
+                fn_arg2 = builder.trunc(builder.load(self.get_ptr_by_expr(ExprId("RDX", 64))), llvm_ir.IntType(32))
+                fn_args = [fn_arg1, fn_arg2]
+                ret = builder.call(fn, fn_args)
+                self.update_cache(expr, ret)
+
+                return ret
 
             if len(expr.args) > 1:
 
@@ -1259,10 +1275,18 @@ class LLVMFunction(object):
                                  to_and)
 
             # Cast into e.size
-            ret = builder.trunc(
-                anded,
-                LLVMType.IntType(expr.size)
-            )
+            if expr.size < expr.arg.size:
+                ret = builder.trunc(
+                    anded,
+                    LLVMType.IntType(expr.size)
+                )
+            elif expr.size == expr.arg.size:
+                ret = src
+            else:
+                ret = builder.zext(
+                    anded,
+                    LLVMType.IntType(expr.size)
+                )
 
             self.update_cache(expr, ret)
             return ret

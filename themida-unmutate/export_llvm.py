@@ -17,8 +17,81 @@ from miasm.ir.symbexec import SymbolicExecutionEngine
 
 from .llvmconvert import LLVMType, LLVMContext_IRCompilation, LLVMFunction_IRCompilation
 
+# Abstract arguments/ret value and map them to native registers
+# following the corresponding ABI
+ABI_X64_MAPPING = {
+    "args": ["RCX", "RDX", "R8", "R9"],
+    "ret": "RAX",
+}
+
+# TODO: make configurable
+FUNCTIONS_INFO = {
+# Address -> args, ret value
+    0x140001410: {
+        "name": "MutateBranches1",
+        "args": [{
+            "name": "ARG1",
+            "size": 32,
+            "llvm_type": LLVMType.IntType(32)
+        },
+        {
+            "name": "ARG2",
+            "size": 64,
+            "llvm_type": llvm_ir.PointerType(LLVMType.IntType(32))
+        }],
+        "ret": {
+            "size": 32,
+            "llvm_type": LLVMType.IntType(32)
+        }
+    },
+    0x1400015a0: {
+        "name": "rc4",
+        "args": [{
+            "name": "key",
+            "size": 64,
+            "llvm_type": llvm_ir.PointerType(LLVMType.IntType(8))
+        },
+        {
+            "name": "key_len",
+            "size": 32,
+            "llvm_type": LLVMType.IntType(32)
+        },
+        {
+            "name": "buf",
+            "size": 64,
+            "llvm_type": llvm_ir.PointerType(LLVMType.IntType(8))
+        },
+        {
+            "name": "buf_len",
+            "size": 32,
+            "llvm_type": LLVMType.IntType(32)
+        }],
+        "ret": {
+            "size": 0,
+            "llvm_type": llvm_ir.VoidType()
+        }
+    },
+    0x1400014e0: {
+        "name": "rc4_init",
+        "args": [{
+            "name": "key",
+            "size": 64,
+            "llvm_type": llvm_ir.PointerType(LLVMType.IntType(8))
+        },
+        {
+            "name": "key_len",
+            "size": 32,
+            "llvm_type": LLVMType.IntType(32)
+        }],
+        "ret": {
+            "size": 0,
+            "llvm_type": LLVMType.IntType(64) # llvm_ir.VoidType()
+        }
+    }
+}
+
 def main():
-    parser = ArgumentParser("LLVM export example")
+    parser = ArgumentParser("Automatic deobfuscation tool powered by Miasm and LLVM")
     parser.add_argument("target", help="Target binary")
     parser.add_argument("addr", help="Target address")
     parser.add_argument("--architecture", "-a", help="Force architecture")
@@ -41,15 +114,14 @@ def main():
 
     print("Resolving mutated code portion address...")
     mutated_code_addr = resolve_mutated_portion_address(lifter, ircfg, target_addr)
-    assert isinstance(mutated_code_addr, m2_expr.ExprInt)
     print(f"Mutated code is at {mutated_code_addr}")
 
     # Disassemble the mutated code portion
     dis.follow_call = False
-    asmcfg_mutated = dis.dis_multiblock(mutated_code_addr.arg)
+    asmcfg_mutated = dis.dis_multiblock(mutated_code_addr)
 
     # Enable callback and disassemble the target function
-    dis.dis_block_callback = functools.partial(cb_redirect_tail_call, redirect_addr=mutated_code_addr.arg)
+    dis.dis_block_callback = functools.partial(cb_redirect_tail_call, redirect_addr=mutated_code_addr)
     asmcfg_target = dis.dis_multiblock(target_addr, blocks=asmcfg_mutated)
 
     # Lift asm to IR
@@ -83,7 +155,9 @@ def resolve_mutated_portion_address(lifter: Lifter, ircfg: IRCFG, call_addr: int
 
     # First `cmp` -> eval to zero
     if not isinstance(cur_addr, m2_expr.ExprCond) or not isinstance(cur_addr.cond, m2_expr.ExprMem):
-        raise Exception("Function doesn't behave as expected")
+        print("Function doesn't behave as expected, considering it unmutated")
+        return call_addr
+    
     # Value if condition is evaled zero
     symb.eval_updt_expr(m2_expr.ExprAssign(cur_addr.cond, m2_expr.ExprInt(0, cur_addr.cond.size)))
     target = cur_addr.src2
@@ -91,14 +165,17 @@ def resolve_mutated_portion_address(lifter: Lifter, ircfg: IRCFG, call_addr: int
 
     # Second `cmp` -> eval to zero
     if not isinstance(cur_addr, m2_expr.ExprCond) or not isinstance(cur_addr.cond, m2_expr.ExprMem):
-        raise Exception("Function doesn't behave as expected")
+        print("Function doesn't behave as expected, considering it unmutated")
+        return call_addr
+    
     # Value if condition is evaled zero
     symb.eval_updt_expr(m2_expr.ExprAssign(cur_addr.cond, m2_expr.ExprInt(0, cur_addr.cond.size)))
     target = cur_addr.src2
     cur_addr = symb.run_at(ircfg, target)
+    assert isinstance(cur_addr, m2_expr.ExprInt)
 
     # This time we should have the real mutated function address
-    return cur_addr
+    return expr_int_to_int(cur_addr)
 
 jmp_replaced = 0
 
@@ -222,7 +299,8 @@ def apply_stack_to_reg_simplification(lifter: Lifter, ircfg: IRCFG, function_sta
                         modified = True
                         continue
                     if isinstance(assign_expr.src, m2_expr.ExprOp) and assign_expr.src.op == "call_func_stack":
-                        # Keep as is
+                        # Ignore
+                        modified = True
                         continue
 
                     # Concretize SRC and set current_stack_slot
@@ -285,7 +363,6 @@ def apply_stack_to_reg_simplification(lifter: Lifter, ircfg: IRCFG, function_sta
         stack_offset_after_block[loc_key] = current_stack_pointer
         if current_stack_pointer != -function_stack_size:
             print(f"Stack modification detected in block {loc_key}")
-            # assert current_stack_pointer <= 0
 
 
 def replace_stack_ptrs_expr(lifter: Lifter, expr: m2_expr.Expr, current_stack_slot: int, stack_slots: Dict[int, Any])-> m2_expr.Expr:
@@ -383,22 +460,24 @@ def convert_to_llvm_ir(lifter: Lifter, ircfg: IRCFG) -> str:
     context = LLVMContext_IRCompilation()
     context.lifter = lifter
 
-    # Abstract arguments/ret value and map them to native registers
-    # following the corresponding ABI
-    ABI_X64_MAPPING = {
-        "ARG1": "RCX",
-        "ARG2": "RDX",
-        "ARG3": "R8",
-        "ARG4": "R9",
-        "RET_VALUE": "RAX",
-    }
-    function_args = [("ARG1", 32, LLVMType.IntType(32)), ("ARG2", 64, llvm_ir.PointerType(LLVMType.IntType(32)))]
-    function_ret_value = ("RET_VALUE", 32, LLVMType.IntType(32))
-    func = LLVMFunction_IRCompilation(context, name="reconstructed_function")
-    func.ret_type = function_ret_value[2]
-    for arg, size, ty in function_args:
-        func.my_args.append((m2_expr.ExprId(arg, size), ty, arg))
+    function_addr = lifter.loc_db.get_location_offset(ircfg.heads()[0])
+    function_info = FUNCTIONS_INFO[function_addr]
+    func = LLVMFunction_IRCompilation(context, name=function_info["name"])
+    func.ret_type = function_info["ret"]["llvm_type"]
+    for arg in function_info["args"]:
+        func.my_args.append((m2_expr.ExprId(arg["name"], arg["size"]), arg["llvm_type"], arg["name"]))
     func.init_fc()
+
+    # Declare all functions
+    for func_addr, func_info in FUNCTIONS_INFO.items():
+        func_name = "sub_%s" % hex(func_addr)
+        fc = {
+            func_name: {
+                "args": [arg["llvm_type"] for arg in func_info["args"]],
+                "ret": func_info["ret"]["llvm_type"]
+            }
+        }
+        context.add_fc(fc)
 
     # Here, as an example, we arbitrarily represent registers with global
     # variables. Locals allocas are used for the computation during the function,
@@ -428,8 +507,12 @@ def convert_to_llvm_ir(lifter: Lifter, ircfg: IRCFG) -> str:
                 )
 
      # Setup function arguments
-    for arg_name, arg_size, arg_type in function_args:
-        reg_name = ABI_X64_MAPPING.get(arg_name)
+    for i, arg in enumerate(function_info["args"]):
+        arg_name = arg["name"]
+        arg_size = arg["size"]
+        arg_type = arg["llvm_type"]
+
+        reg_name = ABI_X64_MAPPING["args"][i]
         if reg_name is None:
             # TODO: arg is on the stack
             pass
@@ -452,7 +535,7 @@ def convert_to_llvm_ir(lifter: Lifter, ircfg: IRCFG) -> str:
         func.local_vars_pointers[reg_name] = func.builder.alloca(llvm_ir.IntType(64), name=reg_name)
         func.builder.store(value, func.local_vars_pointers[reg_name])
 
-    reg_parameters = [ABI_X64_MAPPING[arg_name] for arg_name, _, _ in function_args]
+    reg_parameters = [ABI_X64_MAPPING["args"][i] for i in range(len(function_info["args"]))]
     for var in all_regs:
         # Setup STACK slots
         if var.name.startswith("STACK"):
@@ -479,18 +562,18 @@ def convert_to_llvm_ir(lifter: Lifter, ircfg: IRCFG) -> str:
 
     # Finish the function
     # TODO: handle multiple ret type
-    ret_value = func.builder.load(func.local_vars_pointers[ABI_X64_MAPPING[function_ret_value[0]]])
-    ret_value = func.builder.trunc(ret_value, function_ret_value[2])
-    func.builder.ret(ret_value)
+    ret_type = function_info["ret"]["llvm_type"]
+    if isinstance(ret_type, llvm_ir.VoidType):
+        func.builder.ret_void()
+    else:
+        ret_value = func.builder.load(func.local_vars_pointers[ABI_X64_MAPPING["ret"]])
+        ret_value = func.builder.trunc(ret_value, ret_type)
+        func.builder.ret(ret_value)
 
     ir = str(func)
     
     # Remove useless register/global
-    replace_irdst = lambda match: ''
+    replace_irdst = lambda _: ''
     ir = re.sub('.*[@%]"IRDst".*', replace_irdst, ir)
-
-    # Dirty fix for a miasm IR translation bug
-    replace_trunc = lambda match: f'zext i32 %"{match.group(1)}" to i64'
-    ir = re.sub('trunc i32 %"(.*)" to i64', replace_trunc, ir)
 
     return ir
