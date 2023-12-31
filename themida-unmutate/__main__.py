@@ -1,4 +1,4 @@
-from .export_llvm import main
+from .symexec import main
 
 if __name__ == "__main__":
     main()
