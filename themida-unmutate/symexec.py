@@ -10,6 +10,7 @@ from miasm.core.locationdb import LocationDB
 from miasm.ir.symbexec import SymbolicExecutionEngine
 from miasm.analysis.binary import Container
 from miasm.analysis.machine import Machine
+from miasm.core import parse_asm
 from miasm.core.asmblock import AsmCFG, disasmEngine, asm_resolve_final, bbl_simplifier
 from miasm.core.interval import interval
 
@@ -106,7 +107,10 @@ def main() -> None:
     parser = ArgumentParser("Automatic deobfuscation tool powered by Miasm")
     parser.add_argument("target", help="Target binary")
     parser.add_argument("addr", help="Target address")
-    parser.add_argument("--output", "-o", help="Output file path")
+    parser.add_argument("--output",
+                        "-o",
+                        help="Output file path",
+                        required=True)
     parser.add_argument("--architecture", "-a", help="Force architecture")
     args = parser.parse_args()
 
@@ -263,6 +267,7 @@ def main() -> None:
                     asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
                     continue
 
+        print(modified_variables)
         print("FIXME: unsupported instruction (or unmutated block?)")
 
     # Create a patched copy of the target
@@ -293,22 +298,43 @@ def main() -> None:
     loc_db.set_location_offset(head, section_base)
 
     # Generate deobfuscated assembly code
-    patches = asm_resolve_final(mdis.arch,
-                                asmcfg,
-                                dst_interval=interval([
-                                    (section_base,
-                                     section_base + unmut_section.virtual_size)
-                                ]))
+    unmut_section_patches = asm_resolve_final(
+        mdis.arch,
+        asmcfg,
+        dst_interval=interval([(section_base,
+                                section_base + unmut_section.virtual_size)]))
 
     # Overwrite the section's content
-    new_section_size = max(map(lambda a: a - section_base,
-                               patches.keys())) + 15
+    new_section_size = max(
+        map(lambda a: a - section_base, unmut_section_patches.keys())) + 15
     new_content = bytearray([0] * new_section_size)
-    for addr, data in patches.items():
+    for addr, data in unmut_section_patches.items():
         offset = addr - section_base
         new_content[offset:offset + len(data)] = data
-    # TODO: patch original location to jmp to the newly generated code
     unmut_section.content = memoryview(new_content)
+
+    # Redirect function to its simplified version
+    # TODO: use function address when multi-function support is added
+    umut_loc_str = f"loc_{target_addr:x}"
+    jmp_unmut_instr_str = f"{umut_loc_str}:\nJMP 0x{section_base:x}"
+    jmp_unmut_asmcfg = parse_asm.parse_txt(mdis.arch, mdis.attrib,
+                                           jmp_unmut_instr_str, mdis.loc_db)
+    # Set 'main' loc_key's offset
+    loc_db.set_location_offset(loc_db.get_name_location(umut_loc_str),
+                               target_addr)
+    unmut_jmp_patches = asm_resolve_final(mdis.arch, jmp_unmut_asmcfg)
+
+    # Find the section containing the virtual address we want to modify
+    target_rva = target_addr - image_base
+    text_section = section_from_virtual_address(pe_obj, target_rva)
+    assert text_section is not None
+
+    # Apply patches
+    text_section_bytes = bytearray(text_section.content)
+    for addr, data in unmut_jmp_patches.items():
+        offset = addr - section_base
+        text_section_bytes[offset:offset + len(data)] = data
+    text_section.content = memoryview(text_section_bytes)
 
     # Invoke the builder
     builder = lief.PE.Builder(pe_obj)
@@ -593,6 +619,15 @@ def fix_rip_relative_instruction(asmcfg: AsmCFG,
             instr.args[i] = instr.args[i].replace_expr(fix_dict)
 
     return instr
+
+
+def section_from_virtual_address(lief_bin: lief.Binary,
+                                 virtual_addr: int) -> Optional[lief.Section]:
+    for s in lief_bin.sections:
+        if s.virtual_address <= virtual_addr < s.virtual_address + s.size:
+            return s
+
+    return None
 
 
 if __name__ == "__main__":
