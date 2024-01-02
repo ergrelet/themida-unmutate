@@ -1,8 +1,9 @@
 import itertools
 import sys
-from typing import Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 import lief
+import miasm.arch.x86.arch as x86_arch
 import miasm.expression.expression as m2_expr
 from argparse import ArgumentParser
 from miasm.core.cpu import instruction
@@ -15,6 +16,7 @@ from miasm.core.asmblock import AsmCFG, disasmEngine, asm_resolve_final, bbl_sim
 from miasm.core.interval import interval
 
 from .unwrapping import unwrap_function
+from .miasm_utils import expr_int_to_int
 
 NEW_SECTION_NAME = ".unmut"
 NEW_SECTION_MAX_SIZE = 2**16
@@ -103,6 +105,8 @@ AMD64_SLICES_MAPPING = {
     "R15[0:16]": "R15W",
     "R15[0:8]": "R15B",
 }
+AMD64_SP_REG = "RSP"
+AMD64_IP_REG = "RIP"
 
 
 def main() -> None:
@@ -143,17 +147,27 @@ def main() -> None:
         if asm_block is None:
             # Some instructions such `idiv` generate multiple IR basic blocks from a single asm instruction, so we
             # skip these
-            # print(str(ir_block))
             continue
 
         relevant_assignblks = ir_block.assignblks[:-1]
         relevant_blk_count = len(relevant_assignblks)
-        # Only 1 or 2 instructions
-        #   -> unmutated, no junk code -> no action needed -> keep first instruction as is
+        # No relevant instruction
+        # -> unmutated, branching instruction -> keep as is
+        if relevant_blk_count == 0:
+            print(ir_block.assignblks[0].instr)
+            continue
+
+        # Only 1 or 2 relevant instructions
+        # -> unmutated, no junk code -> no action needed -> keep first instruction as is
         if relevant_blk_count <= 2:
             print(ir_block.assignblks[0].instr)
             relocatable_instr = fix_rip_relative_instruction(
-                asmcfg, asm_block.lines[0])
+                asmcfg, ir_block.assignblks[0].instr)
+            # Note(ergrelet): reset the instruction's additional info to avoid
+            # certain assembling issues where instruction prefixes are mixed
+            # in a illegal way.
+            relocatable_instr.additional_info = x86_arch.additional_info()
+
             asm_block.lines[0] = relocatable_instr
             continue
 
@@ -165,8 +179,6 @@ def main() -> None:
 
         # Strip FLAGS register (as these are trashed by the mutation)
         strip_sym_flags(reference_sb)
-        # print("Reference:")
-        # print(reference_sb.dump())
 
         # More than 2 instructions but a single instruction replicates the symbolic state
         #   -> unmutated, junk code inserted -> keep the one instruction as is
@@ -248,7 +260,7 @@ def main() -> None:
                         print(modified_variables)
 
             # 2 assignment blocks
-            # -> PUSH, POP, XCHG
+            # -> PUSH, POP, XCHG, `SUB RSP, X`
             case 2:
                 modified_variables_iter = iter(modified_variables.items())
                 assignblk1 = next(modified_variables_iter)
@@ -279,8 +291,29 @@ def main() -> None:
                     asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
                     continue
 
+                # `SUB RSP, X`
+                original_instr = handle_sub_rsp(mdis, modified_variables)
+                if original_instr is not None:
+                    # Update block asm block
+                    relocatable_instr = fix_rip_relative_instruction(
+                        asmcfg, original_instr)
+                    asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
+                    continue
+
+            # More than 2 assignment blocks
+            # -> `SUB RSP, X`
+            case _:
+                original_instr = handle_sub_rsp(mdis, modified_variables)
+                if original_instr is not None:
+                    # Update block asm block
+                    relocatable_instr = fix_rip_relative_instruction(
+                        asmcfg, original_instr)
+                    asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
+                    continue
+
         print(modified_variables)
-        print("FIXME: unsupported instruction (or unmutated block?)")
+        print("FIXME: unsupported instruction (or unmutated block?). "
+              "Mutated block will be kept as is.")
 
     # Create a patched copy of the target
     pe_obj = lief.PE.parse(args.target)
@@ -334,7 +367,7 @@ def main() -> None:
     jmp_unmut_instr_str = f"{umut_loc_str}:\nJMP 0x{unmut_section_base:x}"
     jmp_unmut_asmcfg = parse_asm.parse_txt(mdis.arch, mdis.attrib,
                                            jmp_unmut_instr_str, mdis.loc_db)
-    # Set 'main' loc_key's offset
+    # Set loc_key's offset
     loc_db.set_location_offset(loc_db.get_name_location(umut_loc_str),
                                target_addr)
     unmut_jmp_patches = asm_resolve_final(mdis.arch, jmp_unmut_asmcfg)
@@ -546,10 +579,10 @@ def handle_push(
         mdis: disasmEngine, assignblk1: Tuple[m2_expr.Expr, m2_expr.Expr],
         assignblk2: Tuple[m2_expr.Expr,
                           m2_expr.Expr]) -> Optional[instruction]:
-    rsp_decrement_op = m2_expr.ExprOp("+", m2_expr.ExprId("RSP", 64),
+    rsp_decrement_op = m2_expr.ExprOp("+", m2_expr.ExprId(AMD64_SP_REG, 64),
                                       m2_expr.ExprInt(0xFFFFFFFFFFFFFFF8, 64))
     is_rsp_decremented = assignblk1[1] == rsp_decrement_op
-    is_dst1_rsp = assignblk1[0].is_id() and assignblk1[0].name == "RSP"
+    is_dst1_rsp = assignblk1[0].is_id() and assignblk1[0].name == AMD64_SP_REG
     is_dst2_on_stack = assignblk2[0].is_mem() and \
         assignblk2[0].ptr == rsp_decrement_op
 
@@ -567,15 +600,93 @@ def handle_pop(
         mdis: disasmEngine, assignblk1: Tuple[m2_expr.Expr, m2_expr.Expr],
         assignblk2: Tuple[m2_expr.Expr,
                           m2_expr.Expr]) -> Optional[instruction]:
-    rsp_increment_op = m2_expr.ExprOp("+", m2_expr.ExprId("RSP", 64),
+    rsp_increment_op = m2_expr.ExprOp("+", m2_expr.ExprId(AMD64_SP_REG, 64),
                                       m2_expr.ExprInt(0x8, 64))
     is_rsp_incremented = assignblk2[1] == rsp_increment_op
     is_value1_on_stack = assignblk1[1].is_mem() and assignblk1[1].ptr.is_id() \
-            and assignblk1[1].ptr.name == "RSP"
-    is_dst2_rsp = assignblk2[0].is_id() and assignblk2[0].name == "RSP"
+            and assignblk1[1].ptr.name == AMD64_SP_REG
+    is_dst2_rsp = assignblk2[0].is_id() and assignblk2[0].name == AMD64_SP_REG
 
     if is_value1_on_stack and is_rsp_incremented and is_dst2_rsp:
         original_instr_str = f"POP {ir_to_asm_str(assignblk1[0])}"
+        original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db,
+                                              mdis.attrib)
+        print(original_instr)
+        return original_instr
+
+    return None
+
+
+# Note(ergrelet): `SUB RSP, X` is a special case where there might be some residual
+# constraints that the symbolic execution cannot discard, because allocated stack
+# slots are live and values might have been assigned to some of them by the
+# inserted junk code.
+# We thus have to differentiate legit PUSH-like instructions from junked
+# `SUB RSP, X` instructions.
+def handle_sub_rsp(
+        mdis: disasmEngine,
+        assign_blks: Dict[m2_expr.Expr,
+                          m2_expr.Expr]) -> Optional[instruction]:
+
+    def is_sub_rsp_expr(expr: m2_expr.Expr) -> bool:
+        """
+        This matches OP expressions of the form "RSP - X"
+        """
+        if not expr.is_op():
+            return False
+
+        is_binary_add = expr.op == "+" and len(expr.args) == 2
+        if not is_binary_add:
+            return False
+
+        # One of the operands must be RSP
+        rsp_in_expr = any(
+            map(lambda arg: arg.is_id() and arg.name == AMD64_SP_REG,
+                expr.args))
+        # The other operand must be a negative integer
+        neg_int_in_expr = any(
+            map(lambda arg: arg.is_int() and expr_int_to_int(arg) < 0,
+                expr.args))
+
+        return rsp_in_expr and neg_int_in_expr
+
+    def is_sub_rsp_blk(assign_blk: Tuple[m2_expr.Expr, m2_expr.Expr]) -> bool:
+        """
+        This matches assign blocks of the form "RSP - X"
+        """
+        dst, src = assign_blk
+        if not dst.is_id() or not src.is_op():
+            return False
+
+        # Destination must be RSP
+        dst_is_rsp = dst.name == AMD64_SP_REG
+        return dst_is_rsp and is_sub_rsp_expr(src)
+
+    # Check if a SUB operation is applied to RSP
+    sub_rsp_blk = next(filter(is_sub_rsp_blk, assign_blks.items()), None)
+    if sub_rsp_blk is not None:
+        # Extract allocated size
+        allocated_window = (0, expr_int_to_int(sub_rsp_blk[1].args[1]))
+        # Check if all allocated slots have been written to or not. This
+        # assumes no PUSH-like x86 instruction allocates more slots than needed to
+        # write the data it pushes to the stack
+        #
+        # FIXME: we're not checking individual stack slots but rather
+        # the outter boundaries from used stack slots. It would be better
+        # to track accesses to each stack slot separately.
+        used_window = [0, 0]
+        for dst in assign_blks.keys():
+            if dst.is_mem() and is_sub_rsp_expr(dst.ptr):
+                dst_offset_in_stack = expr_int_to_int(dst.ptr.args[1])
+                dst_size_in_bytes = dst.size // 8
+                used_window[0] = max(used_window[0],
+                                     dst_offset_in_stack + dst_size_in_bytes)
+                used_window[1] = min(used_window[1], dst_offset_in_stack)
+        if tuple(used_window) == allocated_window:
+            # All allocated slots are used, must be a PUSH-like instruction
+            return None
+
+        original_instr_str = f"SUB {AMD64_SP_REG}, {-allocated_window[1]}"
         original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db,
                                               mdis.attrib)
         print(original_instr)
@@ -624,15 +735,15 @@ def is_a_slice_of(slice_expr: m2_expr.Expr, expr: m2_expr.Expr) -> bool:
 # Fix RIP relative instructions to make them relocatable
 def fix_rip_relative_instruction(asmcfg: AsmCFG,
                                  instr: instruction) -> instruction:
-    rip = m2_expr.ExprId("RIP", 64)
+    rip = m2_expr.ExprId(AMD64_IP_REG, 64)
     # Note(ergrelet): see https://github.com/cea-sec/miasm/issues/1258#issuecomment-645640366
     # for more information on what the '_' symbol is used for.
     new_next_addr_card = m2_expr.ExprLoc(
         asmcfg.loc_db.get_or_create_name_location('_'), 64)
     for i in range(len(instr.args)):
         if rip in instr.args[i]:
-            next_addr = m2_expr.ExprInt(instr.offset + instr.l, 64)
-            fix_dict = {rip: rip + next_addr - new_next_addr_card}
+            next_instr_addr = m2_expr.ExprInt(instr.offset + instr.l, 64)
+            fix_dict = {rip: rip + next_instr_addr - new_next_addr_card}
             instr.args[i] = instr.args[i].replace_expr(fix_dict)
 
     return instr
