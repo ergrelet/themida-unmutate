@@ -14,6 +14,8 @@ from miasm.core import parse_asm
 from miasm.core.asmblock import AsmCFG, disasmEngine, asm_resolve_final, bbl_simplifier
 from miasm.core.interval import interval
 
+from .unwrapping import unwrap_function
+
 NEW_SECTION_NAME = ".unmut"
 NEW_SECTION_MAX_SIZE = 2**16
 X86_BINARY_OPS_MAPPING = {
@@ -113,8 +115,17 @@ def main() -> None:
                         required=True)
     parser.add_argument("--architecture", "-a", help="Force architecture")
     args = parser.parse_args()
-
     target_addr = int(args.addr, 0)
+
+    # Resolve mutated code's addr
+    print("Resolving mutated code portion address...")
+    mutated_code_addr = unwrap_function(args.target, args.architecture,
+                                        target_addr)
+    if mutated_code_addr == target_addr:
+        print("Failure")
+        return
+
+    print(f"Mutated code is at 0x{mutated_code_addr:x}")
 
     loc_db = LocationDB()
     # This part focus on obtaining an IRCFG to transform
@@ -122,7 +133,8 @@ def main() -> None:
     machine = Machine(args.architecture if args.architecture else cont.arch)
     lifter = machine.lifter(loc_db)
     mdis = machine.dis_engine(cont.bin_stream, loc_db=loc_db)
-    asmcfg = mdis.dis_multiblock(target_addr)
+
+    asmcfg = mdis.dis_multiblock(mutated_code_addr)
     ircfg = lifter.new_ircfg_from_asmcfg(asmcfg)
 
     for loc_key, ir_block in ircfg.blocks.items():
@@ -290,33 +302,36 @@ def main() -> None:
 
     # Unpin blocks to be able to relocate the whole CFG
     image_base = pe_obj.imagebase
-    section_base = image_base + unmut_section.virtual_address
+    unmut_section_base = image_base + unmut_section.virtual_address
 
     head = asmcfg.heads()[0]
     for ir_block in asmcfg.blocks:
         loc_db.unset_location_offset(ir_block.loc_key)
-    loc_db.set_location_offset(head, section_base)
+    loc_db.set_location_offset(head, unmut_section_base)
 
     # Generate deobfuscated assembly code
     unmut_section_patches = asm_resolve_final(
         mdis.arch,
         asmcfg,
-        dst_interval=interval([(section_base,
-                                section_base + unmut_section.virtual_size)]))
+        dst_interval=interval([
+            (unmut_section_base,
+             unmut_section_base + unmut_section.virtual_size)
+        ]))
 
     # Overwrite the section's content
     new_section_size = max(
-        map(lambda a: a - section_base, unmut_section_patches.keys())) + 15
+        map(lambda a: a - unmut_section_base,
+            unmut_section_patches.keys())) + 15
     new_content = bytearray([0] * new_section_size)
     for addr, data in unmut_section_patches.items():
-        offset = addr - section_base
+        offset = addr - unmut_section_base
         new_content[offset:offset + len(data)] = data
     unmut_section.content = memoryview(new_content)
 
     # Redirect function to its simplified version
     # TODO: use function address when multi-function support is added
     umut_loc_str = f"loc_{target_addr:x}"
-    jmp_unmut_instr_str = f"{umut_loc_str}:\nJMP 0x{section_base:x}"
+    jmp_unmut_instr_str = f"{umut_loc_str}:\nJMP 0x{unmut_section_base:x}"
     jmp_unmut_asmcfg = parse_asm.parse_txt(mdis.arch, mdis.attrib,
                                            jmp_unmut_instr_str, mdis.loc_db)
     # Set 'main' loc_key's offset
@@ -330,9 +345,10 @@ def main() -> None:
     assert text_section is not None
 
     # Apply patches
+    text_section_base = image_base + text_section.virtual_address
     text_section_bytes = bytearray(text_section.content)
     for addr, data in unmut_jmp_patches.items():
-        offset = addr - section_base
+        offset = addr - text_section_base
         text_section_bytes[offset:offset + len(data)] = data
     text_section.content = memoryview(text_section_bytes)
 
@@ -457,7 +473,7 @@ def handle_add_operation(mdis: disasmEngine, dst: m2_expr.Expr,
                 print(original_instr)
                 return original_instr
 
-    # TODO: handle NEG
+    # TODO: handle NEG?
 
     # Add (regular binary operations)
     return handle_binary_operation(mdis, dst, op_expr)
@@ -511,6 +527,7 @@ def handle_xchg(
         mdis: disasmEngine, assignblk1: Tuple[m2_expr.Expr, m2_expr.Expr],
         assignblk2: Tuple[m2_expr.Expr,
                           m2_expr.Expr]) -> Optional[instruction]:
+    # TODO: implement handling of XCHG
     if assignblk1[0] == assignblk2[1] and \
             assignblk2[0] == assignblk1[1]:
         print(assignblk1)
