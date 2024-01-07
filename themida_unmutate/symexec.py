@@ -62,7 +62,8 @@ def main() -> None:
     print(f"Mutated code is at 0x{mutated_code_addr:x}")
 
     loc_db = LocationDB()
-    cont = Container.from_stream(open(args.target, 'rb'), loc_db)
+    with open(args.target, 'rb') as target_bin:
+        cont = Container.from_stream(target_bin, loc_db)
     machine = Machine(args.architecture if args.architecture else cont.arch)
     assert machine.dis_engine is not None
 
@@ -423,7 +424,7 @@ def handle_add_operation(mdis: disasmEngine, dst: m2_expr.Expr,
                 print(original_instr)
                 return original_instr
             # DST = DST[0:XX] + (-RHS)
-            elif is_a_slice_of(lhs, dst):
+            if is_a_slice_of(lhs, dst):
                 dst = m2_expr.ExprSlice(dst, lhs.start, lhs.stop)
                 original_instr_str = f"SUB {ir_to_asm_str(dst)}, {ir_to_asm_str(rhs.arg[0])}"
                 original_instr = mdis.arch.fromstring(original_instr_str,
@@ -442,7 +443,7 @@ def handle_add_operation(mdis: disasmEngine, dst: m2_expr.Expr,
                 print(original_instr)
                 return original_instr
             # DST = (-LHS) + DST[0:XX]
-            elif is_a_slice_of(rhs, dst):
+            if is_a_slice_of(rhs, dst):
                 dst = m2_expr.ExprSlice(dst, rhs.start, rhs.stop)
                 original_instr_str = f"SUB {ir_to_asm_str(dst)}, {ir_to_asm_str(lhs.arg[0])}"
                 original_instr = mdis.arch.fromstring(original_instr_str,
@@ -474,14 +475,14 @@ def handle_binary_operation(mdis: disasmEngine, dst: m2_expr.Expr,
             print(original_instr)
             return original_instr
         # DST = OP(LHS, DST)
-        elif dst == rhs:
+        if dst == rhs:
             original_instr_str = f"{op_asm_str} {ir_to_asm_str(dst)}, {ir_to_asm_str(lhs)}"
             original_instr = mdis.arch.fromstring(original_instr_str,
                                                   mdis.loc_db, mdis.attrib)
             print(original_instr)
             return original_instr
         # DST = OP(DST[0:XX], RHS)
-        elif is_a_slice_of(lhs, dst):
+        if is_a_slice_of(lhs, dst):
             dst = m2_expr.ExprSlice(dst, lhs.start, lhs.stop)
             original_instr_str = f"{op_asm_str} {ir_to_asm_str(dst)}, {ir_to_asm_str(rhs)}"
             original_instr = mdis.arch.fromstring(original_instr_str,
@@ -489,7 +490,7 @@ def handle_binary_operation(mdis: disasmEngine, dst: m2_expr.Expr,
             print(original_instr)
             return original_instr
         # DST = OP(LHS, DST[0:XX])
-        elif is_a_slice_of(rhs, dst):
+        if is_a_slice_of(rhs, dst):
             dst = m2_expr.ExprSlice(dst, rhs.start, rhs.stop)
             original_instr_str = f"{op_asm_str} {ir_to_asm_str(dst)}, {ir_to_asm_str(lhs)}"
             original_instr = mdis.arch.fromstring(original_instr_str,
@@ -653,16 +654,16 @@ def mem_ir_to_asm_str(mem_expr: m2_expr.ExprMem) -> str:
             mem_prefix = x86_arch.SIZE2MEMPREFIX[mem_expr.size]
             return f"{mem_prefix} PTR [{mem_expr.ptr}]"
         case _:
-            raise Exception("Invalid ExprMem size")
+            raise ValueError("Invalid ExprMem size")
 
 
 def slice_ir_to_asm_str(slice_expr: m2_expr.ExprSlice) -> str:
     match type(slice_expr.arg):
         case m2_expr.ExprId:
             # Slice of a register
-            return AMD64_SLICES_MAPPING[slice_expr]
+            return str(AMD64_SLICES_MAPPING[slice_expr])
         case _:
-            return str(expr)
+            return str(slice_expr)
 
 
 def normalize_ir_assigment(
@@ -726,7 +727,7 @@ def normalize_ir_assigment(
 
 
 def is_a_slice_of(slice_expr: m2_expr.Expr, expr: m2_expr.Expr) -> bool:
-    return slice_expr.is_slice() and slice_expr.arg == expr
+    return bool(slice_expr.is_slice()) and slice_expr.arg == expr
 
 
 # Fix RIP relative instructions to make them relocatable
@@ -737,12 +738,12 @@ def fix_rip_relative_instruction(asmcfg: AsmCFG,
     # for more information on what the '_' symbol is used for.
     new_next_addr_card = m2_expr.ExprLoc(
         asmcfg.loc_db.get_or_create_name_location('_'), AMD64_PTR_SIZE)
-    for i in range(len(instr.args)):
-        if rip in instr.args[i]:
+    for i, arg in enumerate(instr.args):
+        if rip in arg:
             next_instr_addr = m2_expr.ExprInt(instr.offset + instr.l,
                                               AMD64_PTR_SIZE)
             fix_dict = {rip: rip + next_instr_addr - new_next_addr_card}
-            instr.args[i] = instr.args[i].replace_expr(fix_dict)
+            instr.args[i] = arg.replace_expr(fix_dict)
 
     return instr
 
@@ -751,6 +752,7 @@ def section_from_virtual_address(lief_bin: lief.Binary,
                                  virtual_addr: int) -> Optional[lief.Section]:
     for s in lief_bin.sections:
         if s.virtual_address <= virtual_addr < s.virtual_address + s.size:
+            assert isinstance(s, lief.Section)
             return s
 
     return None

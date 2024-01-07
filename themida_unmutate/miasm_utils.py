@@ -9,4 +9,4 @@ def expr_int_to_int(expr: m2_expr.ExprInt) -> int:
     else:
         result = expr.arg
 
-    return result
+    return int(result)

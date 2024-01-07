@@ -8,10 +8,11 @@ from miasm.ir.symbexec import SymbolicExecutionEngine
 from .miasm_utils import expr_int_to_int
 
 
-def unwrap_function(target_bin: str, target_arch: str,
+def unwrap_function(target_bin_path: str, target_arch: str,
                     target_addr: int) -> int:
     loc_db = LocationDB()
-    cont = Container.from_stream(open(target_bin, 'rb'), loc_db)
+    with open(target_bin_path, 'rb') as target_bin:
+        cont = Container.from_stream(target_bin, loc_db)
     machine = Machine(target_arch if target_arch else cont.arch)
     assert machine.dis_engine is not None
 
