@@ -1,4 +1,4 @@
-from .symexec import main
+from .main import entry_point
 
 if __name__ == "__main__":
-    main()
+    entry_point()

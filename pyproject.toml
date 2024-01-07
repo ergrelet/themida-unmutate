@@ -19,7 +19,7 @@ mypy = "^1.8.0"
 pylint = "^3.0.3"
 
 [tool.poetry.scripts]
-themida-unmutate = 'themida_unmutate.symexec:main'
+themida-unmutate = 'themida_unmutate.main:entry_point'
 
 [tool.mypy]
 python_version = "3.11"

@@ -1,25 +1,14 @@
 import itertools
-import sys
-from argparse import ArgumentParser
 from typing import Optional, Union
 
-import lief
 import miasm.arch.x86.arch as x86_arch
 import miasm.expression.expression as m2_expr
+from miasm.core.asmblock import AsmCFG, disasmEngine, bbl_simplifier
 from miasm.core.cpu import instruction
-from miasm.core.locationdb import LocationDB
 from miasm.ir.symbexec import SymbolicExecutionEngine
-from miasm.analysis.binary import Container
-from miasm.analysis.machine import Machine
-from miasm.core import parse_asm
-from miasm.core.asmblock import AsmCFG, disasmEngine, asm_resolve_final, bbl_simplifier
-from miasm.core.interval import interval
 
-from .unwrapping import unwrap_function
-from .miasm_utils import expr_int_to_int
+from themida_unmutate.miasm_utils import MiasmContext, expr_int_to_int
 
-NEW_SECTION_NAME = ".unmut"
-NEW_SECTION_MAX_SIZE = 2**16
 AMD64_PTR_SIZE = 64
 X86_BINARY_OPS_MAPPING = {
     "+": "ADD",
@@ -39,291 +28,224 @@ AMD64_IP_REG = "RIP"
 MiasmIRAssignment = tuple[m2_expr.Expr, m2_expr.Expr]
 
 
-def main() -> None:
-    parser = ArgumentParser("Automatic deobfuscation tool powered by Miasm")
-    parser.add_argument("target", help="Target binary")
-    parser.add_argument("addr", help="Target address")
-    parser.add_argument("--output",
-                        "-o",
-                        help="Output file path",
-                        required=True)
-    parser.add_argument("--architecture", "-a", help="Force architecture")
-    args = parser.parse_args()
-    target_addr = int(args.addr, 0)
+def disassemble_and_simplify_functions(
+        miasm_ctx: MiasmContext,
+        mutated_func_addrs: list[int]) -> list[AsmCFG]:
+    """
+    Disassemble mutated functions, simplify their `AsmCFG` and return them.
+    """
+    # Iterate through functions, disassemble and simplify them
+    simplified_func_asmcfgs: list[AsmCFG] = []
+    for mutated_code_addr in mutated_func_addrs:
+        print(f"Simplifying function at address 0x{mutated_code_addr:x}")
+        # Disassemble function
+        asm_cfg = miasm_ctx.mdis.dis_multiblock(mutated_code_addr)
+        # Lift assembly to IR
+        ir_cfg = miasm_ctx.lifter.new_ircfg_from_asmcfg(asm_cfg)
 
-    # Resolve mutated code's addr
-    print("Resolving mutated code portion address...")
-    mutated_code_addr = unwrap_function(args.target, args.architecture,
-                                        target_addr)
-    if mutated_code_addr == target_addr:
-        print("Failure")
-        return
-
-    print(f"Mutated code is at 0x{mutated_code_addr:x}")
-
-    loc_db = LocationDB()
-    with open(args.target, 'rb') as target_bin:
-        cont = Container.from_stream(target_bin, loc_db)
-    machine = Machine(args.architecture if args.architecture else cont.arch)
-    assert machine.dis_engine is not None
-
-    # Disassemble function
-    mdis = machine.dis_engine(cont.bin_stream, loc_db=loc_db)
-    asmcfg = mdis.dis_multiblock(mutated_code_addr)
-    # Lift assembly to IR
-    lifter = machine.lifter(loc_db)
-    ircfg = lifter.new_ircfg_from_asmcfg(asmcfg)
-
-    # Process IR basic blocks
-    for loc_key, ir_block in ircfg.blocks.items():
-        print(f"{loc_key}:")
-        asm_block = asmcfg.loc_key_to_block(loc_key)
-        if asm_block is None:
-            # Some instructions such `idiv` generate multiple IR basic blocks from a single asm instruction, so we
-            # skip these
-            continue
-
-        relevant_assignblks = ir_block.assignblks[:-1]
-        relevant_blk_count = len(relevant_assignblks)
-        # No relevant instruction
-        # -> unmutated, branching instruction -> keep as is
-        if relevant_blk_count == 0:
-            print(ir_block.assignblks[0].instr)
-            continue
-
-        # Only 1 or 2 relevant instructions
-        # -> unmutated, no junk code -> no action needed -> keep first instruction as is
-        if relevant_blk_count <= 2:
-            print(ir_block.assignblks[0].instr)
-            relocatable_instr = fix_rip_relative_instruction(
-                asmcfg, ir_block.assignblks[0].instr)
-            # Note(ergrelet): reset the instruction's additional info to avoid
-            # certain assembling issues where instruction prefixes are mixed
-            # in a illegal way.
-            relocatable_instr.additional_info = x86_arch.additional_info()
-
-            asm_block.lines[0] = relocatable_instr
-            continue
-
-        reference_sb = SymbolicExecutionEngine(lifter)
-        for assign_block in relevant_assignblks:
-            reference_sb.eval_updt_assignblk(assign_block)
-            # Forget dead stack slots
-            reference_sb.del_mem_above_stack(lifter.sp)
-
-        # Strip FLAGS register (as these are trashed by the mutation)
-        strip_sym_flags(reference_sb)
-
-        # More than 2 instructions but a single instruction replicates the symbolic state
-        #   -> unmutated, junk code inserted -> keep the one instruction as is
-        block_simplified = False
-        for assignblk_subset in itertools.combinations(relevant_assignblks, 1):
-            sb = SymbolicExecutionEngine(lifter)
-
-            for assign_block in assignblk_subset:
-                sb.eval_updt_assignblk(assign_block)
-            reference_sb.del_mem_above_stack(lifter.sp)
-
-            # Check if instruction replicates the symbolic state
-            if reference_sb.get_state() == sb.get_state():
-                for a in assignblk_subset:
-                    print(a.instr)
-                    # Update block asm block
-                    relocatable_instr = fix_rip_relative_instruction(
-                        asmcfg, a.instr)
-                    asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
-                block_simplified = True
-                break
-        if block_simplified:
-            continue
-
-        # More than 2 instructions but no single instruction replicates the symbolic state
-        #   -> mutated, junk code inserted -> try to "synthetize" instruction manually
-        modified_variables = dict(reference_sb.modified())
-        match len(modified_variables):
-        # No assignment block: RET, JMP
-            case 0:
-                # Keep only the last instruction
-                print(asm_block.lines[-1])
-                asm_block.lines = [asm_block.lines[-1]]
+        # Process IR basic blocks
+        for loc_key, ir_block in ir_cfg.blocks.items():
+            print(f"{loc_key}:")
+            asm_block = asm_cfg.loc_key_to_block(loc_key)
+            if asm_block is None:
+                # Some instructions such `idiv` generate multiple IR basic blocks from a single asm instruction, so we
+                # skip these
                 continue
 
-            # 1 assignment block: MOV, XCHG, n-ary operators
-            case 1:
-                ir_assignment = next(iter(modified_variables.items()))
-                dst, value = normalize_ir_assigment(ir_assignment)
-                match type(value):
-                    case m2_expr.ExprId | m2_expr.ExprMem | m2_expr.ExprInt | m2_expr.ExprSlice:
-                        # Assignation
-                        # -> MOV
-                        match type(dst):
-                            case m2_expr.ExprId | m2_expr.ExprMem | m2_expr.ExprSlice:
-                                original_instr = handle_mov(mdis, dst, value)
-                                if original_instr is not None:
-                                    # Update block asm block
-                                    relocatable_instr = fix_rip_relative_instruction(
-                                        asmcfg, original_instr)
-                                    asm_block.lines = [
-                                        relocatable_instr, asm_block.lines[-1]
-                                    ]
-                                    continue
+            relevant_assignblks = ir_block.assignblks[:-1]
+            relevant_blk_count = len(relevant_assignblks)
+            # No relevant instruction
+            # -> unmutated, branching instruction -> keep as is
+            if relevant_blk_count == 0:
+                print(ir_block.assignblks[0].instr)
+                continue
 
-                    case m2_expr.ExprOp:
-                        # N-ary operation on native-size registers
-                        # -> ADD/SUB/INC/DEC/AND/OR/XOR/NEG/NOT/ROL/ROR/SAR/SHL/SHR
-                        original_instr = handle_nary_op(mdis, dst, value)
-                        if original_instr is not None:
-                            # Update block asm block
-                            relocatable_instr = fix_rip_relative_instruction(
-                                asmcfg, original_instr)
-                            asm_block.lines = [
-                                relocatable_instr, asm_block.lines[-1]
-                            ]
-                            continue
+            # Only 1 or 2 relevant instructions
+            # -> unmutated, no junk code -> no action needed -> keep first instruction as is
+            if relevant_blk_count <= 2:
+                print(ir_block.assignblks[0].instr)
+                relocatable_instr = fix_rip_relative_instruction(
+                    asm_cfg, ir_block.assignblks[0].instr)
+                # Note(ergrelet): reset the instruction's additional info to avoid
+                # certain assembling issues where instruction prefixes are mixed
+                # in a illegal way.
+                relocatable_instr.additional_info = x86_arch.additional_info()
 
-                    case m2_expr.ExprCompose:
-                        # MOV, XCHG on single register or n-ary operation on lower-sized registers
-                        original_instr = handle_compose(mdis, dst, value)
-                        if original_instr is not None:
-                            # Update block asm block
-                            relocatable_instr = fix_rip_relative_instruction(
-                                asmcfg, original_instr)
-                            asm_block.lines = [
-                                relocatable_instr, asm_block.lines[-1]
-                            ]
-                            continue
+                asm_block.lines[0] = relocatable_instr
+                continue
 
-            # 2 assignment blocks
-            # -> PUSH, POP, XCHG, `SUB RSP, X`
-            case 2:
-                modified_variables_iter = iter(modified_variables.items())
-                assignblk1 = next(modified_variables_iter)
-                assignblk2 = next(modified_variables_iter)
+            reference_sb = SymbolicExecutionEngine(miasm_ctx.lifter)
+            for assign_block in relevant_assignblks:
+                reference_sb.eval_updt_assignblk(assign_block)
+                # Forget dead stack slots
+                reference_sb.del_mem_above_stack(miasm_ctx.lifter.sp)
 
-                # PUSH
-                original_instr = handle_push(mdis, assignblk1, assignblk2)
-                if original_instr is not None:
-                    # Update block asm block
-                    relocatable_instr = fix_rip_relative_instruction(
-                        asmcfg, original_instr)
-                    asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
-                    continue
-                # POP
-                original_instr = handle_pop(mdis, assignblk1, assignblk2)
-                if original_instr is not None:
-                    # Update block asm block
-                    relocatable_instr = fix_rip_relative_instruction(
-                        asmcfg, original_instr)
-                    asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
-                    continue
-                # XCHG
-                original_instr = handle_xchg(mdis, assignblk1, assignblk2)
-                if original_instr is not None:
-                    # Update block asm block
-                    relocatable_instr = fix_rip_relative_instruction(
-                        asmcfg, original_instr)
-                    asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
+            # Strip FLAGS register (as these are trashed by the mutation)
+            strip_sym_flags(reference_sb)
+
+            # More than 2 instructions but a single instruction replicates the symbolic state
+            #   -> unmutated, junk code inserted -> keep the one instruction as is
+            block_simplified = False
+            for assignblk_subset in itertools.combinations(
+                    relevant_assignblks, 1):
+                sb = SymbolicExecutionEngine(miasm_ctx.lifter)
+
+                for assign_block in assignblk_subset:
+                    sb.eval_updt_assignblk(assign_block)
+                reference_sb.del_mem_above_stack(miasm_ctx.lifter.sp)
+
+                # Check if instruction replicates the symbolic state
+                if reference_sb.get_state() == sb.get_state():
+                    for a in assignblk_subset:
+                        print(a.instr)
+                        # Update block asm block
+                        relocatable_instr = fix_rip_relative_instruction(
+                            asm_cfg, a.instr)
+                        asm_block.lines = [
+                            relocatable_instr, asm_block.lines[-1]
+                        ]
+                    block_simplified = True
+                    break
+            if block_simplified:
+                continue
+
+            # More than 2 instructions but no single instruction replicates the symbolic state
+            #   -> mutated, junk code inserted -> try to "synthetize" instruction manually
+            modified_variables = dict(reference_sb.modified())
+            match len(modified_variables):
+            # No assignment block: RET, JMP
+                case 0:
+                    # Keep only the last instruction
+                    print(asm_block.lines[-1])
+                    asm_block.lines = [asm_block.lines[-1]]
                     continue
 
-                # `SUB RSP, X`
-                original_instr = handle_sub_rsp(mdis, modified_variables)
-                if original_instr is not None:
-                    # Update block asm block
-                    relocatable_instr = fix_rip_relative_instruction(
-                        asmcfg, original_instr)
-                    asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
-                    continue
+                # 1 assignment block: MOV, XCHG, n-ary operators
+                case 1:
+                    ir_assignment = next(iter(modified_variables.items()))
+                    dst, value = normalize_ir_assigment(ir_assignment)
+                    match type(value):
+                        case m2_expr.ExprId | m2_expr.ExprMem | m2_expr.ExprInt | m2_expr.ExprSlice:
+                            # Assignation
+                            # -> MOV
+                            match type(dst):
+                                case m2_expr.ExprId | m2_expr.ExprMem | m2_expr.ExprSlice:
+                                    original_instr = handle_mov(
+                                        miasm_ctx.mdis, dst, value)
+                                    if original_instr is not None:
+                                        # Update block asm block
+                                        relocatable_instr = fix_rip_relative_instruction(
+                                            asm_cfg, original_instr)
+                                        asm_block.lines = [
+                                            relocatable_instr,
+                                            asm_block.lines[-1]
+                                        ]
+                                        continue
 
-            # More than 2 assignment blocks
-            # -> `SUB RSP, X`
-            case _:
-                original_instr = handle_sub_rsp(mdis, modified_variables)
-                if original_instr is not None:
-                    # Update block asm block
-                    relocatable_instr = fix_rip_relative_instruction(
-                        asmcfg, original_instr)
-                    asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
-                    continue
+                        case m2_expr.ExprOp:
+                            # N-ary operation on native-size registers
+                            # -> ADD/SUB/INC/DEC/AND/OR/XOR/NEG/NOT/ROL/ROR/SAR/SHL/SHR
+                            original_instr = handle_nary_op(
+                                miasm_ctx.mdis, dst, value)
+                            if original_instr is not None:
+                                # Update block asm block
+                                relocatable_instr = fix_rip_relative_instruction(
+                                    asm_cfg, original_instr)
+                                asm_block.lines = [
+                                    relocatable_instr, asm_block.lines[-1]
+                                ]
+                                continue
 
-        print(modified_variables)
-        print("FIXME: unsupported instruction (or unmutated block?). "
-              "Mutated block will be kept as is.")
+                        case m2_expr.ExprCompose:
+                            # MOV, XCHG on single register or n-ary operation on lower-sized registers
+                            original_instr = handle_compose(
+                                miasm_ctx.mdis, dst, value)
+                            if original_instr is not None:
+                                # Update block asm block
+                                relocatable_instr = fix_rip_relative_instruction(
+                                    asm_cfg, original_instr)
+                                asm_block.lines = [
+                                    relocatable_instr, asm_block.lines[-1]
+                                ]
+                                continue
 
-    # Create a patched copy of the target
-    pe_obj = lief.PE.parse(args.target)
-    if pe_obj is None:
-        print(f"Failed to parse PE '{args.target}'")
-        sys.exit(-1)
+                # 2 assignment blocks
+                # -> PUSH, POP, XCHG, `SUB RSP, X`
+                case 2:
+                    modified_variables_iter = iter(modified_variables.items())
+                    assignblk1 = next(modified_variables_iter)
+                    assignblk2 = next(modified_variables_iter)
 
-    # Create a new code section
-    unmut_section = lief.PE.Section(
-        [0] * NEW_SECTION_MAX_SIZE, NEW_SECTION_NAME,
-        lief.PE.SECTION_CHARACTERISTICS.CNT_CODE.value
-        | lief.PE.SECTION_CHARACTERISTICS.MEM_READ.value
-        | lief.PE.SECTION_CHARACTERISTICS.MEM_EXECUTE.value)
-    pe_obj.add_section(unmut_section)
-    unmut_section = pe_obj.get_section(NEW_SECTION_NAME)
+                    # PUSH
+                    original_instr = handle_push(miasm_ctx.mdis, assignblk1,
+                                                 assignblk2)
+                    if original_instr is not None:
+                        # Update block asm block
+                        relocatable_instr = fix_rip_relative_instruction(
+                            asm_cfg, original_instr)
+                        asm_block.lines = [
+                            relocatable_instr, asm_block.lines[-1]
+                        ]
+                        continue
+                    # POP
+                    original_instr = handle_pop(miasm_ctx.mdis, assignblk1,
+                                                assignblk2)
+                    if original_instr is not None:
+                        # Update block asm block
+                        relocatable_instr = fix_rip_relative_instruction(
+                            asm_cfg, original_instr)
+                        asm_block.lines = [
+                            relocatable_instr, asm_block.lines[-1]
+                        ]
+                        continue
+                    # XCHG
+                    original_instr = handle_xchg(miasm_ctx.mdis, assignblk1,
+                                                 assignblk2)
+                    if original_instr is not None:
+                        # Update block asm block
+                        relocatable_instr = fix_rip_relative_instruction(
+                            asm_cfg, original_instr)
+                        asm_block.lines = [
+                            relocatable_instr, asm_block.lines[-1]
+                        ]
+                        continue
 
-    # Simplify CFG (by merging basic blocks when possible)
-    asmcfg = bbl_simplifier(asmcfg)
+                    # `SUB RSP, X`
+                    original_instr = handle_sub_rsp(miasm_ctx.mdis,
+                                                    modified_variables)
+                    if original_instr is not None:
+                        # Update block asm block
+                        relocatable_instr = fix_rip_relative_instruction(
+                            asm_cfg, original_instr)
+                        asm_block.lines = [
+                            relocatable_instr, asm_block.lines[-1]
+                        ]
+                        continue
 
-    # Unpin blocks to be able to relocate the whole CFG
-    image_base = pe_obj.imagebase
-    unmut_section_base = image_base + unmut_section.virtual_address
+                # More than 2 assignment blocks
+                # -> `SUB RSP, X`
+                case _:
+                    original_instr = handle_sub_rsp(miasm_ctx.mdis,
+                                                    modified_variables)
+                    if original_instr is not None:
+                        # Update block asm block
+                        relocatable_instr = fix_rip_relative_instruction(
+                            asm_cfg, original_instr)
+                        asm_block.lines = [
+                            relocatable_instr, asm_block.lines[-1]
+                        ]
+                        continue
 
-    head = asmcfg.heads()[0]
-    for ir_block in asmcfg.blocks:
-        loc_db.unset_location_offset(ir_block.loc_key)
-    loc_db.set_location_offset(head, unmut_section_base)
+            print(modified_variables)
+            print("FIXME: unsupported instruction (or unmutated block?). "
+                  "Mutated block will be kept as is.")
 
-    # Generate deobfuscated assembly code
-    unmut_section_patches = asm_resolve_final(
-        mdis.arch,
-        asmcfg,
-        dst_interval=interval([
-            (unmut_section_base,
-             unmut_section_base + unmut_section.virtual_size)
-        ]))
+        # Simplify CFG (by merging basic blocks when possible)
+        asm_cfg = bbl_simplifier(asm_cfg)
 
-    # Overwrite the section's content
-    new_section_size = max(
-        map(lambda a: a - unmut_section_base,
-            unmut_section_patches.keys())) + 15
-    new_content = bytearray([0] * new_section_size)
-    for addr, data in unmut_section_patches.items():
-        offset = addr - unmut_section_base
-        new_content[offset:offset + len(data)] = data
-    unmut_section.content = memoryview(new_content)
+        simplified_func_asmcfgs.append(asm_cfg)
 
-    # Redirect function to its simplified version
-    # TODO: use function address when multi-function support is added
-    umut_loc_str = f"loc_{target_addr:x}"
-    jmp_unmut_instr_str = f"{umut_loc_str}:\nJMP 0x{unmut_section_base:x}"
-    jmp_unmut_asmcfg = parse_asm.parse_txt(mdis.arch, mdis.attrib,
-                                           jmp_unmut_instr_str, mdis.loc_db)
-    # Set loc_key's offset
-    loc_db.set_location_offset(loc_db.get_name_location(umut_loc_str),
-                               target_addr)
-    unmut_jmp_patches = asm_resolve_final(mdis.arch, jmp_unmut_asmcfg)
-
-    # Find the section containing the virtual address we want to modify
-    target_rva = target_addr - image_base
-    text_section = section_from_virtual_address(pe_obj, target_rva)
-    assert text_section is not None
-
-    # Apply patches
-    text_section_base = image_base + text_section.virtual_address
-    text_section_bytes = bytearray(text_section.content)
-    for addr, data in unmut_jmp_patches.items():
-        offset = addr - text_section_base
-        text_section_bytes[offset:offset + len(data)] = data
-    text_section.content = memoryview(text_section_bytes)
-
-    # Invoke the builder
-    builder = lief.PE.Builder(pe_obj)
-    builder.build()
-    # Save the result
-    builder.write(args.output)
+    return simplified_func_asmcfgs
 
 
 def strip_sym_flags(symex: SymbolicExecutionEngine) -> None:
@@ -746,17 +668,3 @@ def fix_rip_relative_instruction(asmcfg: AsmCFG,
             instr.args[i] = arg.replace_expr(fix_dict)
 
     return instr
-
-
-def section_from_virtual_address(lief_bin: lief.Binary,
-                                 virtual_addr: int) -> Optional[lief.Section]:
-    for s in lief_bin.sections:
-        if s.virtual_address <= virtual_addr < s.virtual_address + s.size:
-            assert isinstance(s, lief.Section)
-            return s
-
-    return None
-
-
-if __name__ == "__main__":
-    main()

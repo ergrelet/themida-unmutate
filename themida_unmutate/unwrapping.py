@@ -1,31 +1,23 @@
 import miasm.expression.expression as m2_expr
-from miasm.core.locationdb import LocationDB
-from miasm.analysis.binary import Container
-from miasm.analysis.machine import Machine
 from miasm.ir.ir import IRCFG, Lifter
 from miasm.ir.symbexec import SymbolicExecutionEngine
 
-from .miasm_utils import expr_int_to_int
+from themida_unmutate.miasm_utils import MiasmContext, expr_int_to_int
 
 
-def unwrap_function(target_bin_path: str, target_arch: str,
-                    target_addr: int) -> int:
-    loc_db = LocationDB()
-    with open(target_bin_path, 'rb') as target_bin:
-        cont = Container.from_stream(target_bin, loc_db)
-    machine = Machine(target_arch if target_arch else cont.arch)
-    assert machine.dis_engine is not None
+def unwrap_function(target_bin_path: str, target_addr: int) -> int:
+    # Setup disassembler and lifter
+    miasm_ctx = MiasmContext(target_bin_path)
 
-    # Disassemble
-    mdis = machine.dis_engine(cont.bin_stream, loc_db=loc_db)
-    mdis.follow_call = True
-    asmcfg = mdis.dis_multiblock(target_addr)
+    # Disassemble trampoline
+    miasm_ctx.mdis.follow_call = True
+    asmcfg = miasm_ctx.mdis.dis_multiblock(target_addr)
 
-    # Lift asm to IR
-    lifter = machine.lifter(loc_db)
-    ircfg = lifter.new_ircfg_from_asmcfg(asmcfg)
+    # Lift ASM to IR
+    ircfg = miasm_ctx.lifter.new_ircfg_from_asmcfg(asmcfg)
 
-    return _resolve_mutated_portion_address(lifter, ircfg, target_addr)
+    return _resolve_mutated_portion_address(miasm_ctx.lifter, ircfg,
+                                            target_addr)
 
 
 def _resolve_mutated_portion_address(lifter: Lifter, ircfg: IRCFG,
