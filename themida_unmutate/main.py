@@ -6,9 +6,11 @@ from miasm.core import parse_asm
 from miasm.core.asmblock import AsmCFG, asm_resolve_final
 from miasm.core.interval import interval
 
+from themida_unmutate.logging import setup_logger, LOGGER
 from themida_unmutate.miasm_utils import MiasmContext
 from themida_unmutate.symbolic_execution import disassemble_and_simplify_functions
 from themida_unmutate.unwrapping import unwrap_function
+
 
 NEW_SECTION_NAME = ".unmut"
 NEW_SECTION_MAX_SIZE = 2**16
@@ -17,16 +19,21 @@ NEW_SECTION_MAX_SIZE = 2**16
 def entry_point() -> None:
     # Parse command-line arguments
     args = parse_arguments()
-    protected_func_addrs = list(map(lambda addr: int(addr, 0), args.addresses))
+    
+    # Setup logging
+    setup_logger(args.verbose)
 
     # Setup disassembler and lifter
     miasm_ctx = MiasmContext(args.protected_binary)
 
     # Resolve mutated functions' addresses
+    LOGGER.info("Resolving mutated's functions' addresses...")
+    protected_func_addrs = list(map(lambda addr: int(addr, 0), args.addresses))
     mutated_func_addrs = unwrap_functions(args.protected_binary,
                                           protected_func_addrs)
 
     # Disassemble mutated functions and simplify them
+    LOGGER.info("Deobfuscating mutated functions...")
     simplified_func_asmcfgs = disassemble_and_simplify_functions(
         miasm_ctx, mutated_func_addrs)
 
@@ -37,8 +44,11 @@ def entry_point() -> None:
     }
 
     # Rewrite the protected binary with simplified functions
+    LOGGER.info("Rebuilding binary file...")
     rebuild_simplified_binary(miasm_ctx, func_addr_to_simplified_cfg,
                               args.protected_binary, args.output)
+    
+    LOGGER.info("Done! You can find your deobfuscated binary at '%s'" % args.output)
 
 
 def parse_arguments() -> Namespace:
@@ -56,6 +66,10 @@ def parse_arguments() -> Namespace:
                         "--output",
                         help="Output binary path",
                         required=True)
+    parser.add_argument("-v",
+                        "--verbose",
+                        action='store_true',
+                        help="Enable verbose logging")
 
     return parser.parse_args()
 
@@ -67,12 +81,12 @@ def unwrap_functions(target_binary_path: str,
     """
     mutated_func_addrs: list[int] = []
     for addr in target_function_addrs:
-        print(f"Resolving mutated code portion address for 0x{addr:x}...")
+        LOGGER.debug("Resolving mutated code portion address for 0x%x..." % addr)
         mutated_code_addr = unwrap_function(target_binary_path, addr)
         if mutated_code_addr == addr:
             raise Exception("Failure to unwrap function")
 
-        print(f"Mutated code is at 0x{mutated_code_addr:x}")
+        LOGGER.info("Function at 0x%x jumps to 0x%x" % (addr, mutated_code_addr))
         mutated_func_addrs.append(mutated_code_addr)
 
     return mutated_func_addrs
