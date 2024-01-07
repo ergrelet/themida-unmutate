@@ -11,15 +11,17 @@ from .miasm_utils import expr_int_to_int
 def unwrap_function(target_bin: str, target_arch: str,
                     target_addr: int) -> int:
     loc_db = LocationDB()
-    # This part focus on obtaining an IRCFG to transform
     cont = Container.from_stream(open(target_bin, 'rb'), loc_db)
     machine = Machine(target_arch if target_arch else cont.arch)
-    lifter = machine.lifter(loc_db)
+    assert machine.dis_engine is not None
+
+    # Disassemble
     mdis = machine.dis_engine(cont.bin_stream, loc_db=loc_db)
     mdis.follow_call = True
-
     asmcfg = mdis.dis_multiblock(target_addr)
+
     # Lift asm to IR
+    lifter = machine.lifter(loc_db)
     ircfg = lifter.new_ircfg_from_asmcfg(asmcfg)
 
     return _resolve_mutated_portion_address(lifter, ircfg, target_addr)

@@ -1,11 +1,11 @@
 import itertools
 import sys
-from typing import Dict, Optional, Tuple, Union
+from argparse import ArgumentParser
+from typing import Optional, Union
 
 import lief
 import miasm.arch.x86.arch as x86_arch
 import miasm.expression.expression as m2_expr
-from argparse import ArgumentParser
 from miasm.core.cpu import instruction
 from miasm.core.locationdb import LocationDB
 from miasm.ir.symbexec import SymbolicExecutionEngine
@@ -20,6 +20,7 @@ from .miasm_utils import expr_int_to_int
 
 NEW_SECTION_NAME = ".unmut"
 NEW_SECTION_MAX_SIZE = 2**16
+AMD64_PTR_SIZE = 64
 X86_BINARY_OPS_MAPPING = {
     "+": "ADD",
     "&": "AND",
@@ -31,82 +32,11 @@ X86_BINARY_OPS_MAPPING = {
     ">>>": "ROR",
     "<<<": "ROL",
 }
-AMD64_SLICES_MAPPING = {
-    # RAX
-    "RAX[0:32]": "EAX",
-    "RAX[0:16]": "AX",
-    "RAX[8:16]": "AH",
-    "RAX[0:8]": "AL",
-    # RBX
-    "RBX[0:32]": "EBX",
-    "RBX[0:16]": "BX",
-    "RBX[8:16]": "BH",
-    "RBX[0:8]": "BL",
-    # RCX
-    "RCX[0:32]": "ECX",
-    "RCX[0:16]": "CX",
-    "RCX[8:16]": "CH",
-    "RCX[0:8]": "CL",
-    # RDX
-    "RDX[0:32]": "EDX",
-    "RDX[0:16]": "DX",
-    "RDX[8:16]": "DH",
-    "RDX[0:8]": "DL",
-    # RSI
-    "RSI[0:32]": "ESI",
-    "RSI[0:16]": "SI",
-    "RSI[8:16]": "SIH",
-    "RSI[0:8]": "SIL",
-    # RDI
-    "RDI[0:32]": "EDI",
-    "RDI[0:16]": "DI",
-    "RDI[8:16]": "DIH",
-    "RDI[0:8]": "DIL",
-    # RSP
-    "RSP[0:32]": "ESP",
-    "RSP[0:16]": "SP",
-    "RSP[8:16]": "SPH",
-    "RSP[0:8]": "SPL",
-    # RBP
-    "RBP[0:32]": "EBP",
-    "RBP[0:16]": "BP",
-    "RBP[8:16]": "BPH",
-    "RBP[0:8]": "BPL",
-    # R8
-    "R8[0:32]": "R8D",
-    "R8[0:16]": "R8W",
-    "R8[0:8]": "R8B",
-    # R9
-    "R9[0:32]": "R9D",
-    "R9[0:16]": "R9W",
-    "R9[0:8]": "R9B",
-    # R10
-    "R10[0:32]": "R10D",
-    "R10[0:16]": "R10W",
-    "R10[0:8]": "R10B",
-    # R11
-    "R11[0:32]": "R11D",
-    "R11[0:16]": "R11W",
-    "R11[0:8]": "R11B",
-    # R12
-    "R12[0:32]": "R12D",
-    "R12[0:16]": "R12W",
-    "R12[0:8]": "R12B",
-    # R13
-    "R13[0:32]": "R13D",
-    "R13[0:16]": "R13W",
-    "R13[0:8]": "R13B",
-    # R14
-    "R14[0:32]": "R14D",
-    "R14[0:16]": "R14W",
-    "R14[0:8]": "R14B",
-    # R15
-    "R15[0:32]": "R15D",
-    "R15[0:16]": "R15W",
-    "R15[0:8]": "R15B",
-}
+AMD64_SLICES_MAPPING = {v: k for k, v in x86_arch.replace_regs64.items()}
 AMD64_SP_REG = "RSP"
 AMD64_IP_REG = "RIP"
+
+MiasmIRAssignment = tuple[m2_expr.Expr, m2_expr.Expr]
 
 
 def main() -> None:
@@ -132,15 +62,18 @@ def main() -> None:
     print(f"Mutated code is at 0x{mutated_code_addr:x}")
 
     loc_db = LocationDB()
-    # This part focus on obtaining an IRCFG to transform
     cont = Container.from_stream(open(args.target, 'rb'), loc_db)
     machine = Machine(args.architecture if args.architecture else cont.arch)
-    lifter = machine.lifter(loc_db)
-    mdis = machine.dis_engine(cont.bin_stream, loc_db=loc_db)
+    assert machine.dis_engine is not None
 
+    # Disassemble function
+    mdis = machine.dis_engine(cont.bin_stream, loc_db=loc_db)
     asmcfg = mdis.dis_multiblock(mutated_code_addr)
+    # Lift assembly to IR
+    lifter = machine.lifter(loc_db)
     ircfg = lifter.new_ircfg_from_asmcfg(asmcfg)
 
+    # Process IR basic blocks
     for loc_key, ir_block in ircfg.blocks.items():
         print(f"{loc_key}:")
         asm_block = asmcfg.loc_key_to_block(loc_key)
@@ -214,15 +147,16 @@ def main() -> None:
                 asm_block.lines = [asm_block.lines[-1]]
                 continue
 
-            # 1 assignment block: MOV, n-ary operators
+            # 1 assignment block: MOV, XCHG, n-ary operators
             case 1:
-                dst, value = next(iter(modified_variables.items()))
+                ir_assignment = next(iter(modified_variables.items()))
+                dst, value = normalize_ir_assigment(ir_assignment)
                 match type(value):
-                    case m2_expr.ExprId | m2_expr.ExprMem | m2_expr.ExprInt:
+                    case m2_expr.ExprId | m2_expr.ExprMem | m2_expr.ExprInt | m2_expr.ExprSlice:
                         # Assignation
                         # -> MOV
                         match type(dst):
-                            case m2_expr.ExprId | m2_expr.ExprMem:
+                            case m2_expr.ExprId | m2_expr.ExprMem | m2_expr.ExprSlice:
                                 original_instr = handle_mov(mdis, dst, value)
                                 if original_instr is not None:
                                     # Update block asm block
@@ -232,7 +166,7 @@ def main() -> None:
                                         relocatable_instr, asm_block.lines[-1]
                                     ]
                                     continue
-                                print(modified_variables)
+
                     case m2_expr.ExprOp:
                         # N-ary operation on native-size registers
                         # -> ADD/SUB/INC/DEC/AND/OR/XOR/NEG/NOT/ROL/ROR/SAR/SHL/SHR
@@ -245,9 +179,9 @@ def main() -> None:
                                 relocatable_instr, asm_block.lines[-1]
                             ]
                             continue
-                        print(modified_variables)
+
                     case m2_expr.ExprCompose:
-                        # MOV or n-ary operation on lower-sized registers
+                        # MOV, XCHG on single register or n-ary operation on lower-sized registers
                         original_instr = handle_compose(mdis, dst, value)
                         if original_instr is not None:
                             # Update block asm block
@@ -257,7 +191,6 @@ def main() -> None:
                                 relocatable_instr, asm_block.lines[-1]
                             ]
                             continue
-                        print(modified_variables)
 
             # 2 assignment blocks
             # -> PUSH, POP, XCHG, `SUB RSP, X`
@@ -448,17 +381,28 @@ def handle_compose(mdis: disasmEngine, dst: m2_expr.Expr,
     is_zero_extension = len(compose_expr.args) == 2 and \
         compose_expr.args[1].is_int() and compose_expr.args[1].arg == 0
     # Match exprs of the form: '{RDX[0:8] + 0x1 0 8, RDX[8:64] 8 64}' (subregister)
-    is_subregister = len(compose_expr.args) == 2 and \
+    is_subregister_assign = len(compose_expr.args) == 2 and \
         compose_expr.args[1].is_slice() and \
         compose_expr.args[1].arg.is_id() and dst == compose_expr.args[1].arg
-
-    if is_zero_extension or is_subregister:
+    if is_zero_extension or is_subregister_assign:
         match type(inner_value_expr):
             case m2_expr.ExprSlice:
                 return handle_mov(mdis, dst, inner_value_expr,
                                   is_zero_extension)
             case m2_expr.ExprOp:
                 return handle_nary_op(mdis, dst, inner_value_expr)
+
+    # Handle XCHG cases where DST and SRC are subregisters of the same register
+    # Match exprs of the form: '{RCX[8:16] 0 8, RCX[0:8] 8 16, RCX[16:64] 16 64}' (subregister swap)
+    is_subregister_swap = len(compose_expr.args) == 3 and \
+        all(map(lambda expr: expr.is_slice() and expr.arg.is_id() and expr.arg == dst,
+                compose_expr.args))
+    if is_subregister_swap:
+        compose_lower_part, compose_mid_part, _ = compose_expr.args
+        # 8-bit subregisters swap
+        if compose_lower_part.size == compose_mid_part.size == 8:
+            return handle_xchg(mdis, (compose_lower_part, compose_mid_part),
+                               (compose_mid_part, compose_lower_part))
 
     return None
 
@@ -556,17 +500,16 @@ def handle_binary_operation(mdis: disasmEngine, dst: m2_expr.Expr,
     return None
 
 
-def handle_xchg(
-        mdis: disasmEngine, assignblk1: Tuple[m2_expr.Expr, m2_expr.Expr],
-        assignblk2: Tuple[m2_expr.Expr,
-                          m2_expr.Expr]) -> Optional[instruction]:
-    # TODO: implement handling of XCHG
-    if assignblk1[0] == assignblk2[1] and \
-            assignblk2[0] == assignblk1[1]:
-        print(assignblk1)
-        print(assignblk2)
+def handle_xchg(mdis: disasmEngine, ir_assignment1: MiasmIRAssignment,
+                ir_assignment2: MiasmIRAssignment) -> Optional[instruction]:
+    norm_assignment1 = normalize_ir_assigment(ir_assignment1)
+    norm_assignment2 = normalize_ir_assigment(ir_assignment2)
 
-        original_instr_str = f"XCHG {ir_to_asm_str(assignblk1[0])}, {ir_to_asm_str(assignblk2[1])}?"
+    # Handle most XCHG cases where DST and SRC are swapped and aren't part of
+    # the same register
+    if norm_assignment1[0] == norm_assignment2[1] and \
+            norm_assignment2[0] == norm_assignment1[1]:
+        original_instr_str = f"XCHG {ir_to_asm_str(norm_assignment2[0])}, {ir_to_asm_str(norm_assignment2[1])}"
         original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db,
                                               mdis.attrib)
         print(original_instr)
@@ -575,19 +518,19 @@ def handle_xchg(
     return None
 
 
-def handle_push(
-        mdis: disasmEngine, assignblk1: Tuple[m2_expr.Expr, m2_expr.Expr],
-        assignblk2: Tuple[m2_expr.Expr,
-                          m2_expr.Expr]) -> Optional[instruction]:
-    rsp_decrement_op = m2_expr.ExprOp("+", m2_expr.ExprId(AMD64_SP_REG, 64),
-                                      m2_expr.ExprInt(0xFFFFFFFFFFFFFFF8, 64))
-    is_rsp_decremented = assignblk1[1] == rsp_decrement_op
-    is_dst1_rsp = assignblk1[0].is_id() and assignblk1[0].name == AMD64_SP_REG
-    is_dst2_on_stack = assignblk2[0].is_mem() and \
-        assignblk2[0].ptr == rsp_decrement_op
+def handle_push(mdis: disasmEngine, ir_assignment1: MiasmIRAssignment,
+                ir_assignment2: MiasmIRAssignment) -> Optional[instruction]:
+    rsp_decrement_op = m2_expr.ExprOp(
+        "+", m2_expr.ExprId(AMD64_SP_REG, AMD64_PTR_SIZE),
+        m2_expr.ExprInt(0xFFFFFFFFFFFFFFF8, AMD64_PTR_SIZE))
+    is_rsp_decremented = ir_assignment1[1] == rsp_decrement_op
+    is_dst1_rsp = ir_assignment1[0].is_id(
+    ) and ir_assignment1[0].name == AMD64_SP_REG
+    is_dst2_on_stack = ir_assignment2[0].is_mem() and \
+        ir_assignment2[0].ptr == rsp_decrement_op
 
     if is_dst1_rsp and is_rsp_decremented and is_dst2_on_stack:
-        original_instr_str = f"PUSH {ir_to_asm_str(assignblk2[1])}"
+        original_instr_str = f"PUSH {ir_to_asm_str(ir_assignment2[1])}"
         original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db,
                                               mdis.attrib)
         print(original_instr)
@@ -596,19 +539,19 @@ def handle_push(
     return None
 
 
-def handle_pop(
-        mdis: disasmEngine, assignblk1: Tuple[m2_expr.Expr, m2_expr.Expr],
-        assignblk2: Tuple[m2_expr.Expr,
-                          m2_expr.Expr]) -> Optional[instruction]:
-    rsp_increment_op = m2_expr.ExprOp("+", m2_expr.ExprId(AMD64_SP_REG, 64),
-                                      m2_expr.ExprInt(0x8, 64))
-    is_rsp_incremented = assignblk2[1] == rsp_increment_op
-    is_value1_on_stack = assignblk1[1].is_mem() and assignblk1[1].ptr.is_id() \
-            and assignblk1[1].ptr.name == AMD64_SP_REG
-    is_dst2_rsp = assignblk2[0].is_id() and assignblk2[0].name == AMD64_SP_REG
+def handle_pop(mdis: disasmEngine, ir_assignment1: MiasmIRAssignment,
+               ir_assignment2: MiasmIRAssignment) -> Optional[instruction]:
+    rsp_increment_op = m2_expr.ExprOp(
+        "+", m2_expr.ExprId(AMD64_SP_REG, AMD64_PTR_SIZE),
+        m2_expr.ExprInt(0x8, AMD64_PTR_SIZE))
+    is_rsp_incremented = ir_assignment2[1] == rsp_increment_op
+    is_value1_on_stack = ir_assignment1[1].is_mem() and ir_assignment1[1].ptr.is_id() \
+            and ir_assignment1[1].ptr.name == AMD64_SP_REG
+    is_dst2_rsp = ir_assignment2[0].is_id(
+    ) and ir_assignment2[0].name == AMD64_SP_REG
 
     if is_value1_on_stack and is_rsp_incremented and is_dst2_rsp:
-        original_instr_str = f"POP {ir_to_asm_str(assignblk1[0])}"
+        original_instr_str = f"POP {ir_to_asm_str(ir_assignment1[0])}"
         original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db,
                                               mdis.attrib)
         print(original_instr)
@@ -625,8 +568,7 @@ def handle_pop(
 # `SUB RSP, X` instructions.
 def handle_sub_rsp(
         mdis: disasmEngine,
-        assign_blks: Dict[m2_expr.Expr,
-                          m2_expr.Expr]) -> Optional[instruction]:
+        assign_blk: dict[m2_expr.Expr, m2_expr.Expr]) -> Optional[instruction]:
 
     def is_sub_rsp_expr(expr: m2_expr.Expr) -> bool:
         """
@@ -650,11 +592,11 @@ def handle_sub_rsp(
 
         return rsp_in_expr and neg_int_in_expr
 
-    def is_sub_rsp_blk(assign_blk: Tuple[m2_expr.Expr, m2_expr.Expr]) -> bool:
+    def is_sub_rsp_blk(ir_assignment: MiasmIRAssignment) -> bool:
         """
-        This matches assign blocks of the form "RSP - X"
+        This matches assignments of the form "RSP - X"
         """
-        dst, src = assign_blk
+        dst, src = ir_assignment
         if not dst.is_id() or not src.is_op():
             return False
 
@@ -663,7 +605,7 @@ def handle_sub_rsp(
         return dst_is_rsp and is_sub_rsp_expr(src)
 
     # Check if a SUB operation is applied to RSP
-    sub_rsp_blk = next(filter(is_sub_rsp_blk, assign_blks.items()), None)
+    sub_rsp_blk = next(filter(is_sub_rsp_blk, assign_blk.items()), None)
     if sub_rsp_blk is not None:
         # Extract allocated size
         allocated_window = (0, expr_int_to_int(sub_rsp_blk[1].args[1]))
@@ -675,7 +617,7 @@ def handle_sub_rsp(
         # the outter boundaries from used stack slots. It would be better
         # to track accesses to each stack slot separately.
         used_window = [0, 0]
-        for dst in assign_blks.keys():
+        for dst in assign_blk.keys():
             if dst.is_mem() and is_sub_rsp_expr(dst.ptr):
                 dst_offset_in_stack = expr_int_to_int(dst.ptr.args[1])
                 dst_size_in_bytes = dst.size // 8
@@ -707,14 +649,9 @@ def ir_to_asm_str(expr: m2_expr.Expr) -> str:
 
 def mem_ir_to_asm_str(mem_expr: m2_expr.ExprMem) -> str:
     match mem_expr.size:
-        case 64:
-            return f"QWORD PTR [{mem_expr.ptr}]"
-        case 32:
-            return f"DWORD PTR [{mem_expr.ptr}]"
-        case 16:
-            return f"WORD PTR [{mem_expr.ptr}]"
-        case 8:
-            return f"BYTE PTR [{mem_expr.ptr}]"
+        case 128 | 64 | 32 | 16 | 8:
+            mem_prefix = x86_arch.SIZE2MEMPREFIX[mem_expr.size]
+            return f"{mem_prefix} PTR [{mem_expr.ptr}]"
         case _:
             raise Exception("Invalid ExprMem size")
 
@@ -723,9 +660,69 @@ def slice_ir_to_asm_str(slice_expr: m2_expr.ExprSlice) -> str:
     match type(slice_expr.arg):
         case m2_expr.ExprId:
             # Slice of a register
-            return AMD64_SLICES_MAPPING[str(slice_expr)]
+            return AMD64_SLICES_MAPPING[slice_expr]
         case _:
             return str(expr)
+
+
+def normalize_ir_assigment(
+        ir_assignment: MiasmIRAssignment) -> MiasmIRAssignment:
+    """
+    Normalize IR assignments by transforming `ExprCompose`s in SRC into
+    `ExprSlice`s in DST when appropriate.
+    This allows us to properly detect assigments made to subregisters
+    (e.g., `EAX`, `AX`, `AL`, `AH`).
+    """
+    dst, src = ir_assignment
+
+    # Match ExprId(X) = ExprCompose(Y)
+    if dst.is_id() and src.is_compose():
+        match len(src.args):
+        # 2-way compose (e.g., `EAX`, `AX`, `AL`)
+            case 2:
+                compose_lower_part, compose_upper_part = src.args
+                # If upper bits from DST are kept, it means we're dealing with
+                # a 16-bit or 8-bit subregister
+                if compose_upper_part.arg == dst and \
+                        compose_upper_part.start == compose_lower_part.size and \
+                        compose_upper_part.stop == dst.size:
+                    # DST -> DST[0:X]
+                    new_dst = m2_expr.ExprSlice(dst, 0,
+                                                compose_lower_part.size)
+                    # Concat(SRC[0:X], DST[X:]) -> SRC[0:X]
+                    new_src = compose_lower_part
+                    return (new_dst, new_src)
+
+                # If upper bits are zeroed out, it means mean we're dealing with
+                # a 32-bit subregister
+                upper_zero_bits = m2_expr.ExprInt(0, AMD64_PTR_SIZE // 2)
+                if compose_upper_part == upper_zero_bits:
+                    # DST -> DST[0:32]
+                    new_dst = m2_expr.ExprSlice(dst, 0,
+                                                compose_lower_part.size)
+                    # Concat(SRC, DST[X:]) -> SRC
+                    new_src = compose_lower_part
+
+                    return (new_dst, new_src)
+
+            # 3-way compose (e.g., `AH`, `BH`)
+            case 3:
+                compose_lower_part, compose_mid_part, compose_upper_part = src.args
+                # If lower and upper bits from DST are kept, it means we're
+                # dealing with a subregister
+                if compose_lower_part.arg == dst and \
+                        compose_lower_part.start == 0 and \
+                        compose_upper_part.arg == dst and \
+                        compose_upper_part.stop == dst.size:
+                    # DST -> DST[X:Y]
+                    new_dst = m2_expr.ExprSlice(
+                        dst, compose_lower_part.size,
+                        compose_lower_part.size + compose_mid_part.size)
+                    # Concat(DST[0:X], SRC, DST[Y:]) -> SRC
+                    new_src = compose_mid_part
+                    return (new_dst, new_src)
+
+    return ir_assignment
 
 
 def is_a_slice_of(slice_expr: m2_expr.Expr, expr: m2_expr.Expr) -> bool:
@@ -735,14 +732,15 @@ def is_a_slice_of(slice_expr: m2_expr.Expr, expr: m2_expr.Expr) -> bool:
 # Fix RIP relative instructions to make them relocatable
 def fix_rip_relative_instruction(asmcfg: AsmCFG,
                                  instr: instruction) -> instruction:
-    rip = m2_expr.ExprId(AMD64_IP_REG, 64)
+    rip = m2_expr.ExprId(AMD64_IP_REG, AMD64_PTR_SIZE)
     # Note(ergrelet): see https://github.com/cea-sec/miasm/issues/1258#issuecomment-645640366
     # for more information on what the '_' symbol is used for.
     new_next_addr_card = m2_expr.ExprLoc(
-        asmcfg.loc_db.get_or_create_name_location('_'), 64)
+        asmcfg.loc_db.get_or_create_name_location('_'), AMD64_PTR_SIZE)
     for i in range(len(instr.args)):
         if rip in instr.args[i]:
-            next_instr_addr = m2_expr.ExprInt(instr.offset + instr.l, 64)
+            next_instr_addr = m2_expr.ExprInt(instr.offset + instr.l,
+                                              AMD64_PTR_SIZE)
             fix_dict = {rip: rip + next_instr_addr - new_next_addr_card}
             instr.args[i] = instr.args[i].replace_expr(fix_dict)
 
