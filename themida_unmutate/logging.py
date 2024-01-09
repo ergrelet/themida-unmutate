@@ -4,6 +4,7 @@ import lief
 
 LOGGER = logging.getLogger(__file__)
 
+
 def setup_logger(verbose: bool) -> None:
     # Disable logging from `lief`
     lief.logging.disable()
@@ -20,6 +21,7 @@ def setup_logger(verbose: bool) -> None:
     stream_handler.setFormatter(CustomFormatter())
 
     LOGGER.addHandler(stream_handler)
+
 
 class CustomFormatter(logging.Formatter):
 

@@ -11,7 +11,6 @@ from themida_unmutate.miasm_utils import MiasmContext
 from themida_unmutate.symbolic_execution import disassemble_and_simplify_functions
 from themida_unmutate.unwrapping import unwrap_function
 
-
 NEW_SECTION_NAME = ".unmut"
 NEW_SECTION_MAX_SIZE = 2**16
 
@@ -19,7 +18,7 @@ NEW_SECTION_MAX_SIZE = 2**16
 def entry_point() -> None:
     # Parse command-line arguments
     args = parse_arguments()
-    
+
     # Setup logging
     setup_logger(args.verbose)
 
@@ -47,8 +46,9 @@ def entry_point() -> None:
     LOGGER.info("Rebuilding binary file...")
     rebuild_simplified_binary(miasm_ctx, func_addr_to_simplified_cfg,
                               args.protected_binary, args.output)
-    
-    LOGGER.info("Done! You can find your deobfuscated binary at '%s'" % args.output)
+
+    LOGGER.info("Done! You can find your deobfuscated binary at '%s'" %
+                args.output)
 
 
 def parse_arguments() -> Namespace:
@@ -81,12 +81,14 @@ def unwrap_functions(target_binary_path: str,
     """
     mutated_func_addrs: list[int] = []
     for addr in target_function_addrs:
-        LOGGER.debug("Resolving mutated code portion address for 0x%x..." % addr)
+        LOGGER.debug("Resolving mutated code portion address for 0x%x..." %
+                     addr)
         mutated_code_addr = unwrap_function(target_binary_path, addr)
         if mutated_code_addr == addr:
             raise Exception("Failure to unwrap function")
 
-        LOGGER.info("Function at 0x%x jumps to 0x%x" % (addr, mutated_code_addr))
+        LOGGER.info("Function at 0x%x jumps to 0x%x" %
+                    (addr, mutated_code_addr))
         mutated_func_addrs.append(mutated_code_addr)
 
     return mutated_func_addrs

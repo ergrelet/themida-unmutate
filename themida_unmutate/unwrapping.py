@@ -5,6 +5,7 @@ from themida_unmutate.logging import LOGGER
 
 from themida_unmutate.miasm_utils import MiasmContext, expr_int_to_int
 
+
 def unwrap_function(target_bin_path: str, target_addr: int) -> int:
     # Setup disassembler and lifter
     miasm_ctx = MiasmContext(target_bin_path)
@@ -30,7 +31,8 @@ def _resolve_mutated_portion_address(lifter: Lifter, ircfg: IRCFG,
 
     # First `cmp` -> eval to zero
     if not cur_expr.is_cond() or not cur_expr.cond.is_mem():
-        LOGGER.warning("Function doesn't behave as expected, considering it unmutated")
+        LOGGER.warning(
+            "Function doesn't behave as expected, considering it unmutated")
         return call_addr
 
     # Value if condition is evaled zero
@@ -42,7 +44,8 @@ def _resolve_mutated_portion_address(lifter: Lifter, ircfg: IRCFG,
 
     # Second `cmp` -> eval to zero
     if not cur_expr.is_cond() or not cur_expr.cond.is_mem():
-        LOGGER.warning("Function doesn't behave as expected, considering it unmutated")
+        LOGGER.warning(
+            "Function doesn't behave as expected, considering it unmutated")
         return call_addr
 
     # Value if condition is evaled zero

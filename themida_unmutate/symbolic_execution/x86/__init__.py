@@ -350,7 +350,7 @@ def handle_add_operation(mdis: disasmEngine, dst: m2_expr.Expr,
             # DST = DST[0:XX] + (-RHS)
             if is_a_slice_of(lhs, dst):
                 dst = m2_expr.ExprSlice(dst, lhs.start, lhs.stop)
-                original_instr_str = f"SUB {ir_to_asm_str(dst)}, {ir_to_asm_str(rhs.arg[0])}"
+                original_instr_str = f"SUB {ir_to_asm_str(dst)}, {ir_to_asm_str(rhs.args[0])}"
                 original_instr = mdis.arch.fromstring(original_instr_str,
                                                       mdis.loc_db, mdis.attrib)
                 LOGGER.debug(original_instr)
@@ -361,7 +361,7 @@ def handle_add_operation(mdis: disasmEngine, dst: m2_expr.Expr,
         if len(lhs.args) == 1 and not lhs.args[0].is_op():
             # DST = (-LHS) + DST
             if dst == rhs:
-                original_instr_str = f"SUB {ir_to_asm_str(dst)}, {ir_to_asm_str(lhs.arg[0])}"
+                original_instr_str = f"SUB {ir_to_asm_str(dst)}, {ir_to_asm_str(lhs.args[0])}"
                 original_instr = mdis.arch.fromstring(original_instr_str,
                                                       mdis.loc_db, mdis.attrib)
                 LOGGER.debug(original_instr)
@@ -369,7 +369,7 @@ def handle_add_operation(mdis: disasmEngine, dst: m2_expr.Expr,
             # DST = (-LHS) + DST[0:XX]
             if is_a_slice_of(rhs, dst):
                 dst = m2_expr.ExprSlice(dst, rhs.start, rhs.stop)
-                original_instr_str = f"SUB {ir_to_asm_str(dst)}, {ir_to_asm_str(lhs.arg[0])}"
+                original_instr_str = f"SUB {ir_to_asm_str(dst)}, {ir_to_asm_str(lhs.args[0])}"
                 original_instr = mdis.arch.fromstring(original_instr_str,
                                                       mdis.loc_db, mdis.attrib)
                 LOGGER.debug(original_instr)
