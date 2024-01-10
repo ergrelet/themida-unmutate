@@ -1,2 +1,49 @@
 # themida-unmutate
-Static deobfuscator for Themida/WinLicense's mutation-based obfuscation powered by Miasm and LLVM.
+
+[![GitHub release](https://img.shields.io/github/release/ergrelet/themida-unmutate.svg)](https://github.com/ergrelet/themida-unmutate/releases) [![Minimum Python version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/) ![CI status](https://github.com/ergrelet/themida-unmutate/actions/workflows/lint.yml/badge.svg?branch=main)
+
+A Python 3 tool to statically deobfuscate functions protected by Themida's mutation-based obfuscation.
+
+## Features
+
+- Automatically resolve trampolines' destination addresses
+- Statically deobfuscate mutated functions
+- Rebuild fully working binaries
+
+## Known Limitations
+
+- Doesn't support partially mutated functions
+- Doesn't support ARM64 binaries
+
+## How To
+
+### Download
+
+You can either download the PyInstaller-generated executables from the "Releases"
+section or fetch the project with `git` and install it with `pip`:
+
+```
+pip install git+https://github.com/ergrelet/themida-unmutate.git
+```
+
+### Use
+
+Here's what the CLI looks like:
+
+```
+themida-unmutate --help
+usage: themida-unmutate.cmd [-h] -a ADDRESSES [ADDRESSES ...] -o OUTPUT [-v] protected_binary
+
+Automatic deobfuscation tool for Themida's mutation-based protection
+
+positional arguments:
+  protected_binary      Protected binary path
+
+options:
+  -h, --help            show this help message and exit
+  -a ADDRESSES [ADDRESSES ...], --addresses ADDRESSES [ADDRESSES ...]
+                        Addresses of the functions to deobfuscate
+  -o OUTPUT, --output OUTPUT
+                        Output binary path
+  -v, --verbose         Enable verbose logging
+```

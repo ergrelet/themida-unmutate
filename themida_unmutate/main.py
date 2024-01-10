@@ -55,7 +55,9 @@ def parse_arguments() -> Namespace:
     """
     Parse command-line arguments.
     """
-    parser = ArgumentParser("Automatic deobfuscation tool powered by Miasm")
+    parser = ArgumentParser(
+        description=
+        "Automatic deobfuscation tool for Themida's mutation-based protection")
     parser.add_argument("protected_binary", help="Protected binary path")
     parser.add_argument("-a",
                         "--addresses",
