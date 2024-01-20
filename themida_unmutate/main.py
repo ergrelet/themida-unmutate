@@ -25,11 +25,15 @@ def entry_point() -> None:
     # Setup disassembler and lifter
     miasm_ctx = MiasmContext(args.protected_binary)
 
-    # Resolve mutated functions' addresses
-    LOGGER.info("Resolving mutated's functions' addresses...")
+    # Resolve mutated functions' addresses if needed
     protected_func_addrs = list(map(lambda addr: int(addr, 0), args.addresses))
-    mutated_func_addrs = unwrap_functions(args.protected_binary,
+    if not args.no_trampoline:
+        LOGGER.info("Resolving mutated's functions' addresses...")
+        mutated_func_addrs = unwrap_functions(args.protected_binary,
                                           protected_func_addrs)
+    else:
+        # No trampolines to take care of, use target addresses directly
+        mutated_func_addrs = protected_func_addrs
 
     # Disassemble mutated functions and simplify them
     LOGGER.info("Deobfuscating mutated functions...")
@@ -68,6 +72,9 @@ def parse_arguments() -> Namespace:
                         "--output",
                         help="Output binary path",
                         required=True)
+    parser.add_argument("--no-trampoline",
+                        action='store_true',
+                        help="Disable function unwrapping")
     parser.add_argument("-v",
                         "--verbose",
                         action='store_true',
