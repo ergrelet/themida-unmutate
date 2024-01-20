@@ -30,7 +30,7 @@ def entry_point() -> None:
     if not args.no_trampoline:
         LOGGER.info("Resolving mutated's functions' addresses...")
         mutated_func_addrs = unwrap_functions(args.protected_binary,
-                                          protected_func_addrs)
+                                              protected_func_addrs)
     else:
         # No trampolines to take care of, use target addresses directly
         mutated_func_addrs = protected_func_addrs

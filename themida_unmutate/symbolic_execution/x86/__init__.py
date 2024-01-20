@@ -239,8 +239,8 @@ def disassemble_and_simplify_functions(
                         continue
 
             LOGGER.debug(modified_variables)
-            LOGGER.warning("Unsupported instruction (or unmutated block?). "
-                           "Mutated block will be kept as is.")
+            LOGGER.warning("Unsupported instruction or unmutated block found. "
+                           "Block will be kept as is.")
 
         # Simplify CFG (by merging basic blocks when possible)
         asm_cfg = bbl_simplifier(asm_cfg)
