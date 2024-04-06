@@ -21,6 +21,9 @@ pylint = "^3.0.3"
 [tool.poetry.scripts]
 themida-unmutate = 'themida_unmutate.main:entry_point'
 
+[tool.yapf]
+column_limit = 120
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true

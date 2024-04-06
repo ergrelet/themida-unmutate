@@ -17,12 +17,10 @@ def unwrap_function(target_bin_path: str, target_addr: int) -> int:
     # Lift ASM to IR
     ircfg = miasm_ctx.lifter.new_ircfg_from_asmcfg(asmcfg)
 
-    return _resolve_mutated_portion_address(miasm_ctx.lifter, ircfg,
-                                            target_addr)
+    return _resolve_mutated_portion_address(miasm_ctx.lifter, ircfg, target_addr)
 
 
-def _resolve_mutated_portion_address(lifter: Lifter, ircfg: IRCFG,
-                                     call_addr: int) -> int:
+def _resolve_mutated_portion_address(lifter: Lifter, ircfg: IRCFG, call_addr: int) -> int:
     # Instantiate a Symbolic Execution engine with default value for registers
     symb = SymbolicExecutionEngine(lifter)
 
@@ -31,27 +29,21 @@ def _resolve_mutated_portion_address(lifter: Lifter, ircfg: IRCFG,
 
     # First `cmp` -> eval to zero
     if not cur_expr.is_cond() or not cur_expr.cond.is_mem():
-        LOGGER.warning(
-            "Function doesn't behave as expected, considering it unmutated")
+        LOGGER.warning("Function doesn't behave as expected, considering it unmutated")
         return call_addr
 
     # Value if condition is evaled zero
-    symb.eval_updt_expr(
-        m2_expr.ExprAssign(cur_expr.cond,
-                           m2_expr.ExprInt(0, cur_expr.cond.size)))
+    symb.eval_updt_expr(m2_expr.ExprAssign(cur_expr.cond, m2_expr.ExprInt(0, cur_expr.cond.size)))
     target = cur_expr.src2
     cur_expr = symb.run_at(ircfg, target)
 
     # Second `cmp` -> eval to zero
     if not cur_expr.is_cond() or not cur_expr.cond.is_mem():
-        LOGGER.warning(
-            "Function doesn't behave as expected, considering it unmutated")
+        LOGGER.warning("Function doesn't behave as expected, considering it unmutated")
         return call_addr
 
     # Value if condition is evaled zero
-    symb.eval_updt_expr(
-        m2_expr.ExprAssign(cur_expr.cond,
-                           m2_expr.ExprInt(0, cur_expr.cond.size)))
+    symb.eval_updt_expr(m2_expr.ExprAssign(cur_expr.cond, m2_expr.ExprInt(0, cur_expr.cond.size)))
     target = cur_expr.src2
     cur_expr = symb.run_at(ircfg, target)
     assert isinstance(cur_expr, m2_expr.ExprInt)

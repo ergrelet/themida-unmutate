@@ -30,8 +30,7 @@ class MiasmContext:
         self.machine = Machine(self.container.arch)
         assert self.machine.dis_engine is not None
 
-        self.mdis = self.machine.dis_engine(self.container.bin_stream,
-                                            loc_db=self.loc_db)
+        self.mdis = self.machine.dis_engine(self.container.bin_stream, loc_db=self.loc_db)
         self.lifter = self.machine.lifter(self.loc_db)
 
     @property

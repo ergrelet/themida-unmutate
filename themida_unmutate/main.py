@@ -29,16 +29,14 @@ def entry_point() -> None:
     protected_func_addrs = list(map(lambda addr: int(addr, 0), args.addresses))
     if not args.no_trampoline:
         LOGGER.info("Resolving mutated's functions' addresses...")
-        mutated_func_addrs = unwrap_functions(args.protected_binary,
-                                              protected_func_addrs)
+        mutated_func_addrs = unwrap_functions(args.protected_binary, protected_func_addrs)
     else:
         # No trampolines to take care of, use target addresses directly
         mutated_func_addrs = protected_func_addrs
 
     # Disassemble mutated functions and simplify them
     LOGGER.info("Deobfuscating mutated functions...")
-    simplified_func_asmcfgs = disassemble_and_simplify_functions(
-        miasm_ctx, mutated_func_addrs)
+    simplified_func_asmcfgs = disassemble_and_simplify_functions(miasm_ctx, mutated_func_addrs)
 
     # Map protected functions' addresses to their corresponding simplified `AsmCFG`
     func_addr_to_simplified_cfg = {
@@ -48,61 +46,42 @@ def entry_point() -> None:
 
     # Rewrite the protected binary with simplified functions
     LOGGER.info("Rebuilding binary file...")
-    rebuild_simplified_binary(miasm_ctx, func_addr_to_simplified_cfg,
-                              args.protected_binary, args.output,
+    rebuild_simplified_binary(miasm_ctx, func_addr_to_simplified_cfg, args.protected_binary, args.output,
                               args.reassemble_in_place)
 
-    LOGGER.info("Done! You can find your deobfuscated binary at '%s'" %
-                args.output)
+    LOGGER.info("Done! You can find your deobfuscated binary at '%s'" % args.output)
 
 
 def parse_arguments() -> Namespace:
     """
     Parse command-line arguments.
     """
-    parser = ArgumentParser(
-        description=
-        "Automatic deobfuscation tool for Themida's mutation-based protection")
+    parser = ArgumentParser(description="Automatic deobfuscation tool for Themida's mutation-based protection")
     parser.add_argument("protected_binary", help="Protected binary path")
-    parser.add_argument("-a",
-                        "--addresses",
-                        nargs='+',
-                        help="Addresses of the functions to deobfuscate",
-                        required=True)
-    parser.add_argument("-o",
-                        "--output",
-                        help="Output binary path",
-                        required=True)
-    parser.add_argument("--no-trampoline",
-                        action='store_true',
-                        help="Disable function unwrapping")
+    parser.add_argument("-a", "--addresses", nargs='+', help="Addresses of the functions to deobfuscate", required=True)
+    parser.add_argument("-o", "--output", help="Output binary path", required=True)
+    parser.add_argument("--no-trampoline", action='store_true', help="Disable function unwrapping")
     parser.add_argument("--reassemble-in-place",
                         action='store_true',
                         help="Rewrite simplified code over the mutated code"
                         "rather than in a new code section")
-    parser.add_argument("-v",
-                        "--verbose",
-                        action='store_true',
-                        help="Enable verbose logging")
+    parser.add_argument("-v", "--verbose", action='store_true', help="Enable verbose logging")
 
     return parser.parse_args()
 
 
-def unwrap_functions(target_binary_path: str,
-                     target_function_addrs: list[int]) -> list[int]:
+def unwrap_functions(target_binary_path: str, target_function_addrs: list[int]) -> list[int]:
     """
     Resolve mutated function's addresses from original function addresses.
     """
     mutated_func_addrs: list[int] = []
     for addr in target_function_addrs:
-        LOGGER.debug("Resolving mutated code portion address for 0x%x..." %
-                     addr)
+        LOGGER.debug("Resolving mutated code portion address for 0x%x..." % addr)
         mutated_code_addr = unwrap_function(target_binary_path, addr)
         if mutated_code_addr == addr:
             raise Exception("Failure to unwrap function")
 
-        LOGGER.info("Function at 0x%x jumps to 0x%x" %
-                    (addr, mutated_code_addr))
+        LOGGER.info("Function at 0x%x jumps to 0x%x" % (addr, mutated_code_addr))
         mutated_func_addrs.append(mutated_code_addr)
 
     return mutated_func_addrs
@@ -110,8 +89,7 @@ def unwrap_functions(target_binary_path: str,
 
 def rebuild_simplified_binary(
     miasm_ctx: MiasmContext,
-    func_addr_to_simplified_cfg: dict[int, tuple[AsmCFG,
-                                                 MiasmFunctionInterval]],
+    func_addr_to_simplified_cfg: dict[int, tuple[AsmCFG, MiasmFunctionInterval]],
     input_binary_path: str,
     output_binary_path: str,
     reassemble_in_place: bool,
@@ -124,20 +102,16 @@ def rebuild_simplified_binary(
         raise ValueError("`protected_function_addrs` cannot be empty")
 
     if reassemble_in_place:
-        __rebuild_simplified_binary_in_place(miasm_ctx,
-                                             func_addr_to_simplified_cfg,
-                                             input_binary_path,
+        __rebuild_simplified_binary_in_place(miasm_ctx, func_addr_to_simplified_cfg, input_binary_path,
                                              output_binary_path)
     else:
-        __rebuild_simplified_binary_in_new_section(
-            miasm_ctx, func_addr_to_simplified_cfg, input_binary_path,
-            output_binary_path)
+        __rebuild_simplified_binary_in_new_section(miasm_ctx, func_addr_to_simplified_cfg, input_binary_path,
+                                                   output_binary_path)
 
 
 def __rebuild_simplified_binary_in_new_section(
     miasm_ctx: MiasmContext,
-    func_addr_to_simplified_cfg: dict[int, tuple[AsmCFG,
-                                                 MiasmFunctionInterval]],
+    func_addr_to_simplified_cfg: dict[int, tuple[AsmCFG, MiasmFunctionInterval]],
     input_binary_path: str,
     output_binary_path: str,
 ) -> None:
@@ -151,11 +125,10 @@ def __rebuild_simplified_binary_in_new_section(
         raise Exception(f"Failed to parse PE '{input_binary_path}'")
 
     # Create a new code section
-    unmut_section = lief.PE.Section(
-        [0] * NEW_SECTION_MAX_SIZE, NEW_SECTION_NAME,
-        lief.PE.SECTION_CHARACTERISTICS.CNT_CODE.value
-        | lief.PE.SECTION_CHARACTERISTICS.MEM_READ.value
-        | lief.PE.SECTION_CHARACTERISTICS.MEM_EXECUTE.value)
+    unmut_section = lief.PE.Section([0] * NEW_SECTION_MAX_SIZE, NEW_SECTION_NAME,
+                                    lief.PE.SECTION_CHARACTERISTICS.CNT_CODE.value
+                                    | lief.PE.SECTION_CHARACTERISTICS.MEM_READ.value
+                                    | lief.PE.SECTION_CHARACTERISTICS.MEM_EXECUTE.value)
     pe_obj.add_section(unmut_section)
     unmut_section = pe_obj.get_section(NEW_SECTION_NAME)
     unmut_section_base = pe_obj.imagebase + unmut_section.virtual_address
@@ -176,28 +149,22 @@ def __rebuild_simplified_binary_in_new_section(
             miasm_ctx.loc_db.unset_location_offset(ir_block.loc_key)
 
         # Relocate the function's entry block
-        miasm_ctx.loc_db.set_location_offset(
-            head, unmut_section_base + next_min_offset_for_asm)
+        miasm_ctx.loc_db.set_location_offset(head, unmut_section_base + next_min_offset_for_asm)
 
         # Generate the simplified machine code
         new_section_patches = asm_resolve_final(
             miasm_ctx.mdis.arch,
             simplified_asmcfg,
-            dst_interval=interval([
-                (unmut_section_base + next_min_offset_for_asm,
-                 unmut_section_base + unmut_section.virtual_size -
-                 next_min_offset_for_asm)
-            ]))
+            dst_interval=interval([(unmut_section_base + next_min_offset_for_asm,
+                                    unmut_section_base + unmut_section.virtual_size - next_min_offset_for_asm)]))
 
         # Merge patches into the patch list
         for patch in new_section_patches.items():
             unmut_section_patches.append(patch)
 
         # Associate original addr to simplified addr
-        original_to_simplified[protected_func_addr] = min(
-            new_section_patches.keys())
-        next_min_offset_for_asm = max(
-            new_section_patches.keys()) - unmut_section_base + 15
+        original_to_simplified[protected_func_addr] = min(new_section_patches.keys())
+        next_min_offset_for_asm = max(new_section_patches.keys()) - unmut_section_base + 15
 
     # Overwrite the new section's content
     new_section_size = next_min_offset_for_asm
@@ -209,8 +176,7 @@ def __rebuild_simplified_binary_in_new_section(
 
     # Find the section containing the original function
     protected_function_addrs = func_addr_to_simplified_cfg.keys()
-    text_section = __section_from_virtual_address(
-        pe_obj, next(iter(protected_function_addrs)))
+    text_section = __section_from_virtual_address(pe_obj, next(iter(protected_function_addrs)))
     assert text_section is not None
 
     # Redirect functions to their simplified versions
@@ -220,9 +186,7 @@ def __rebuild_simplified_binary_in_new_section(
         simplified_func_addr = original_to_simplified[target_addr]
         original_loc_str = f"loc_{target_addr:x}"
         jmp_unmut_instr_str = f"{original_loc_str}:\nJMP 0x{simplified_func_addr:x}"
-        jmp_unmut_asmcfg = parse_asm.parse_txt(miasm_ctx.mdis.arch,
-                                               miasm_ctx.mdis.attrib,
-                                               jmp_unmut_instr_str,
+        jmp_unmut_asmcfg = parse_asm.parse_txt(miasm_ctx.mdis.arch, miasm_ctx.mdis.attrib, jmp_unmut_instr_str,
                                                miasm_ctx.mdis.loc_db)
 
         # Unpin loc_key if it's pinned
@@ -233,8 +197,7 @@ def __rebuild_simplified_binary_in_new_section(
         # Relocate the newly created block and generate machine code
         original_loc = miasm_ctx.loc_db.get_name_location(original_loc_str)
         miasm_ctx.loc_db.set_location_offset(original_loc, target_addr)
-        new_jmp_patches = asm_resolve_final(miasm_ctx.mdis.arch,
-                                            jmp_unmut_asmcfg)
+        new_jmp_patches = asm_resolve_final(miasm_ctx.mdis.arch, jmp_unmut_asmcfg)
 
         # Merge patches into the patch list
         for patch in new_jmp_patches.items():
@@ -258,8 +221,7 @@ def __rebuild_simplified_binary_in_new_section(
 
 def __rebuild_simplified_binary_in_place(
     miasm_ctx: MiasmContext,
-    func_addr_to_simplified_cfg: dict[int, tuple[AsmCFG,
-                                                 MiasmFunctionInterval]],
+    func_addr_to_simplified_cfg: dict[int, tuple[AsmCFG, MiasmFunctionInterval]],
     input_binary_path: str,
     output_binary_path: str,
 ) -> None:
@@ -296,18 +258,16 @@ def __rebuild_simplified_binary_in_place(
         miasm_ctx.loc_db.set_location_offset(head, target_addr)
 
         # Generate the simplified machine code
-        new_section_patches = asm_resolve_final(
-            miasm_ctx.mdis.arch,
-            simplified_asmcfg,
-            dst_interval=orignal_asmcfg_interval)
+        new_section_patches = asm_resolve_final(miasm_ctx.mdis.arch,
+                                                simplified_asmcfg,
+                                                dst_interval=orignal_asmcfg_interval)
 
         # Merge patches into the patch list
         for patch in new_section_patches.items():
             unmut_patches.append(patch)
 
         # Associate original addr to simplified addr
-        original_to_simplified[protected_func_addr] = min(
-            new_section_patches.keys())
+        original_to_simplified[protected_func_addr] = min(new_section_patches.keys())
 
     # Find Themida's section
     themida_section = __section_from_virtual_address(pe_obj, target_addr)
@@ -323,8 +283,7 @@ def __rebuild_simplified_binary_in_place(
 
     # Find the section containing the original function
     protected_function_addrs = func_addr_to_simplified_cfg.keys()
-    text_section = __section_from_virtual_address(
-        pe_obj, next(iter(protected_function_addrs)))
+    text_section = __section_from_virtual_address(pe_obj, next(iter(protected_function_addrs)))
     assert text_section is not None
 
     # Redirect functions to their simplified versions
@@ -334,9 +293,7 @@ def __rebuild_simplified_binary_in_place(
         simplified_func_addr = original_to_simplified[target_addr]
         original_loc_str = f"loc_{target_addr:x}"
         jmp_unmut_instr_str = f"{original_loc_str}:\nJMP 0x{simplified_func_addr:x}"
-        jmp_unmut_asmcfg = parse_asm.parse_txt(miasm_ctx.mdis.arch,
-                                               miasm_ctx.mdis.attrib,
-                                               jmp_unmut_instr_str,
+        jmp_unmut_asmcfg = parse_asm.parse_txt(miasm_ctx.mdis.arch, miasm_ctx.mdis.attrib, jmp_unmut_instr_str,
                                                miasm_ctx.mdis.loc_db)
 
         # Unpin loc_key if it's pinned
@@ -347,8 +304,7 @@ def __rebuild_simplified_binary_in_place(
         # Relocate the newly created block and generate machine code
         original_loc = miasm_ctx.loc_db.get_name_location(original_loc_str)
         miasm_ctx.loc_db.set_location_offset(original_loc, target_addr)
-        new_jmp_patches = asm_resolve_final(miasm_ctx.mdis.arch,
-                                            jmp_unmut_asmcfg)
+        new_jmp_patches = asm_resolve_final(miasm_ctx.mdis.arch, jmp_unmut_asmcfg)
 
         # Merge patches into the patch list
         for patch in new_jmp_patches.items():
@@ -370,14 +326,12 @@ def __rebuild_simplified_binary_in_place(
     builder.write(output_binary_path)
 
 
-def __section_from_virtual_address(
-        lief_bin: lief.Binary, virtual_addr: int) -> Optional[lief.Section]:
+def __section_from_virtual_address(lief_bin: lief.Binary, virtual_addr: int) -> Optional[lief.Section]:
     rva = virtual_addr - lief_bin.imagebase
     return __section_from_rva(lief_bin, rva)
 
 
-def __section_from_rva(lief_bin: lief.Binary,
-                       rva: int) -> Optional[lief.Section]:
+def __section_from_rva(lief_bin: lief.Binary, rva: int) -> Optional[lief.Section]:
     for s in lief_bin.sections:
         if s.virtual_address <= rva < s.virtual_address + s.size:
             assert isinstance(s, lief.Section)
