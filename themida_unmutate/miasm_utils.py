@@ -5,8 +5,11 @@ import miasm.expression.expression as m2_expr
 from miasm.analysis.binary import Container
 from miasm.analysis.machine import Machine
 from miasm.core.asmblock import disasmEngine
+from miasm.core.interval import interval
 from miasm.core.locationdb import LocationDB
 from miasm.ir.ir import Lifter
+
+MiasmFunctionInterval = interval
 
 
 @dataclass

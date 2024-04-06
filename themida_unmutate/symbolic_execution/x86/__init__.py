@@ -3,12 +3,13 @@ from typing import Optional, Union
 
 import miasm.arch.x86.arch as x86_arch
 import miasm.expression.expression as m2_expr
-from miasm.core.asmblock import AsmCFG, disasmEngine, bbl_simplifier
+from miasm.core.asmblock import AsmCFG, disasmEngine
 from miasm.core.cpu import instruction
+from miasm.core.interval import interval
 from miasm.ir.symbexec import SymbolicExecutionEngine
 from themida_unmutate.logging import LOGGER
 
-from themida_unmutate.miasm_utils import MiasmContext, expr_int_to_int
+from themida_unmutate.miasm_utils import MiasmContext, MiasmFunctionInterval, expr_int_to_int
 
 AMD64_PTR_SIZE = 64
 X86_BINARY_OPS_MAPPING = {
@@ -30,18 +31,23 @@ MiasmIRAssignment = tuple[m2_expr.Expr, m2_expr.Expr]
 
 
 def disassemble_and_simplify_functions(
-        miasm_ctx: MiasmContext,
-        mutated_func_addrs: list[int]) -> list[AsmCFG]:
+    miasm_ctx: MiasmContext, mutated_func_addrs: list[int]
+) -> list[tuple[AsmCFG, MiasmFunctionInterval]]:
     """
     Disassemble mutated functions, simplify their `AsmCFG` and return them.
     """
     # Iterate through functions, disassemble and simplify them
-    simplified_func_asmcfgs: list[AsmCFG] = []
+    simplified_func_asmcfgs: list[tuple[AsmCFG, MiasmFunctionInterval]] = []
     for mutated_code_addr in mutated_func_addrs:
         LOGGER.info("Simplifying function at 0x%x..." % mutated_code_addr)
 
         # Disassemble function
         asm_cfg = miasm_ctx.mdis.dis_multiblock(mutated_code_addr)
+        # Compute function's interval (this is needed when rewriting the binary
+        # in-place)
+        original_func_interval: MiasmFunctionInterval = interval(
+            blk.get_range() for blk in asm_cfg.blocks)
+
         # Lift assembly to IR
         ir_cfg = miasm_ctx.lifter.new_ircfg_from_asmcfg(asm_cfg)
 
@@ -70,8 +76,10 @@ def disassemble_and_simplify_functions(
                     asm_cfg, ir_block.assignblks[0].instr)
                 # Note(ergrelet): reset the instruction's additional info to avoid
                 # certain assembling issues where instruction prefixes are mixed
-                # in a illegal way.
+                # in an illegal way.
                 relocatable_instr.additional_info = x86_arch.additional_info()
+                relocatable_instr.additional_info.g1.value = 0  # type: ignore
+                relocatable_instr.additional_info.g2.value = 0  # type: ignore
 
                 asm_block.lines[0] = relocatable_instr
                 continue
@@ -242,10 +250,7 @@ def disassemble_and_simplify_functions(
             LOGGER.warning("Unsupported instruction or unmutated block found. "
                            "Block will be kept as is.")
 
-        # Simplify CFG (by merging basic blocks when possible)
-        asm_cfg = bbl_simplifier(asm_cfg)
-
-        simplified_func_asmcfgs.append(asm_cfg)
+        simplified_func_asmcfgs.append((asm_cfg, original_func_interval))
 
     return simplified_func_asmcfgs
 
