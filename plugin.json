@@ -1,0 +1,24 @@
+{
+  "pluginmetadataversion": 2,
+  "name": "themida-unmutate-bn",
+  "type": ["core"],
+  "api": ["python3"],
+  "description": "Static deobfuscator for Themida's mutation-based obfuscation.",
+  "longdescription": "",
+  "license": {
+    "name": "GPL-3.0-or-later",
+    "text": ""
+  },
+  "platforms": ["Darwin", "Linux", "Windows"],
+  "installinstructions": {
+    "Darwin": "",
+    "Linux": "",
+    "Windows": ""
+  },
+  "dependencies": {
+    "pip": ["miasm", "themida-unmutate"]
+  },
+  "version": "0.1.0",
+  "author": "Erwan Grelet",
+  "minimumbinaryninjaversion": 3164
+}

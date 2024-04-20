@@ -23,13 +23,13 @@ def entry_point() -> None:
     setup_logger(args.verbose)
 
     # Setup disassembler and lifter
-    miasm_ctx = MiasmContext(args.protected_binary)
+    miasm_ctx = MiasmContext.from_binary_file(args.protected_binary)
 
     # Resolve mutated functions' addresses if needed
     protected_func_addrs = list(map(lambda addr: int(addr, 0), args.addresses))
     if not args.no_trampoline:
         LOGGER.info("Resolving mutated's functions' addresses...")
-        mutated_func_addrs = unwrap_functions(args.protected_binary, protected_func_addrs)
+        mutated_func_addrs = unwrap_functions(miasm_ctx, protected_func_addrs)
     else:
         # No trampolines to take care of, use target addresses directly
         mutated_func_addrs = protected_func_addrs
@@ -70,14 +70,14 @@ def parse_arguments() -> Namespace:
     return parser.parse_args()
 
 
-def unwrap_functions(target_binary_path: str, target_function_addrs: list[int]) -> list[int]:
+def unwrap_functions(miasm_ctx: MiasmContext, target_function_addrs: list[int]) -> list[int]:
     """
     Resolve mutated function's addresses from original function addresses.
     """
     mutated_func_addrs: list[int] = []
     for addr in target_function_addrs:
         LOGGER.debug("Resolving mutated code portion address for 0x%x..." % addr)
-        mutated_code_addr = unwrap_function(target_binary_path, addr)
+        mutated_code_addr = unwrap_function(miasm_ctx, addr)
         if mutated_code_addr == addr:
             raise Exception("Failure to unwrap function")
 

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Self
 
 import miasm.expression.expression as m2_expr
 
@@ -20,22 +21,25 @@ class MiasmContext:
     mdis: disasmEngine
     lifter: Lifter
 
-    def __init__(self, target_binary_path: str) -> None:
+    @classmethod
+    def from_binary_file(cls, target_binary_path: str) -> Self:
         """
-        Initialize our Miasm context, targeted at x86_64 binaries.
+        Initialize our Miasm context from a binary file.
         """
-        self.loc_db = LocationDB()
+        loc_db = LocationDB()
         with open(target_binary_path, 'rb') as target_binary:
-            self.container = Container.from_stream(target_binary, self.loc_db)
-        self.machine = Machine(self.container.arch)
-        assert self.machine.dis_engine is not None
+            container = Container.from_stream(target_binary, loc_db)
+        machine = Machine(container.arch)
+        assert machine.dis_engine is not None
 
-        self.mdis = self.machine.dis_engine(self.container.bin_stream, loc_db=self.loc_db)
-        self.lifter = self.machine.lifter(self.loc_db)
+        mdis = machine.dis_engine(container.bin_stream, loc_db=loc_db)
+        lifter = machine.lifter(loc_db)
+
+        return cls(loc_db, container, machine, mdis, lifter)
 
     @property
     def arch(self) -> str:
-        return str(self.container.arch)
+        return str(self.machine.name)
 
 
 def expr_int_to_int(expr: m2_expr.ExprInt) -> int:

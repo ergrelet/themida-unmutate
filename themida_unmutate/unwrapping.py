@@ -6,13 +6,14 @@ from themida_unmutate.logging import LOGGER
 from themida_unmutate.miasm_utils import MiasmContext, expr_int_to_int
 
 
-def unwrap_function(target_bin_path: str, target_addr: int) -> int:
-    # Setup disassembler and lifter
-    miasm_ctx = MiasmContext(target_bin_path)
-
-    # Disassemble trampoline
+def unwrap_function(miasm_ctx: MiasmContext, target_addr: int) -> int:
+    # Save `follow_call` value and set it to `True`
+    saved_follow_call = miasm_ctx.mdis.follow_call
     miasm_ctx.mdis.follow_call = True
+    # Disassemble trampoline
     asmcfg = miasm_ctx.mdis.dis_multiblock(target_addr)
+    # Restore `follow_call` value
+    miasm_ctx.mdis.follow_call = saved_follow_call
 
     # Lift ASM to IR
     ircfg = miasm_ctx.lifter.new_ircfg_from_asmcfg(asmcfg)
