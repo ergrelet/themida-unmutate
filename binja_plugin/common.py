@@ -2,10 +2,9 @@ from binaryninja import BinaryView, BinaryReader, BinaryWriter  # type:ignore
 
 from miasm.analysis.binary import Container
 from miasm.analysis.machine import Machine
-from miasm.core import parse_asm
 from miasm.core.asmblock import AsmCFG, asm_resolve_final
 from miasm.core.locationdb import LocationDB
-from themida_unmutate.miasm_utils import MiasmContext, MiasmFunctionInterval
+from themida_unmutate.miasm_utils import MiasmContext, MiasmFunctionInterval, generate_code_redirect_patch
 
 
 def get_binary_data(bv: BinaryView) -> bytearray:
@@ -88,25 +87,7 @@ def rebuild_simplified_binary(
         original_to_simplified[protected_func_addr] = min(new_section_patches.keys())
 
     # Redirect functions to their simplified versions
-    protected_function_addrs = func_addr_to_simplified_cfg.keys()
-    for target_addr in protected_function_addrs:
-        # Generate a single-block AsmCFG with a JMP to the simplified version
+    for target_addr in func_addr_to_simplified_cfg.keys():
         simplified_func_addr = original_to_simplified[target_addr]
-        original_loc_str = f"loc_{target_addr:x}"
-        jmp_unmut_instr_str = f"{original_loc_str}:\nJMP 0x{simplified_func_addr:x}"
-        jmp_unmut_asmcfg = parse_asm.parse_txt(miasm_ctx.mdis.arch, miasm_ctx.mdis.attrib, jmp_unmut_instr_str,
-                                               miasm_ctx.mdis.loc_db)
-
-        # Unpin loc_key if it's pinned
-        original_loc = miasm_ctx.loc_db.get_offset_location(target_addr)
-        if original_loc is not None:
-            miasm_ctx.loc_db.unset_location_offset(original_loc)
-
-        # Relocate the newly created block and generate machine code
-        original_loc = miasm_ctx.loc_db.get_name_location(original_loc_str)
-        miasm_ctx.loc_db.set_location_offset(original_loc, target_addr)
-        new_jmp_patches = asm_resolve_final(miasm_ctx.mdis.arch, jmp_unmut_asmcfg)
-
-        # Apply patches
-        for address, data in new_jmp_patches.items():
-            bw.write(bytes(data), address)
+        address, data = generate_code_redirect_patch(miasm_ctx, target_addr, simplified_func_addr)
+        bw.write(data, address)

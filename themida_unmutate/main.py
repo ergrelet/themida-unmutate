@@ -2,14 +2,13 @@ from argparse import ArgumentParser, Namespace
 from typing import Optional
 
 import lief
-from miasm.core import parse_asm
 from miasm.core.asmblock import AsmCFG, asm_resolve_final, bbl_simplifier
 from miasm.core.interval import interval
 
 from themida_unmutate.logging import setup_logger, LOGGER
-from themida_unmutate.miasm_utils import MiasmContext, MiasmFunctionInterval
+from themida_unmutate.miasm_utils import MiasmContext, MiasmFunctionInterval, generate_code_redirect_patch
 from themida_unmutate.symbolic_execution import disassemble_and_simplify_functions
-from themida_unmutate.unwrapping import unwrap_function
+from themida_unmutate.unwrapping import resolve_mutated_code_address
 
 NEW_SECTION_NAME = ".unmut"
 NEW_SECTION_MAX_SIZE = 2**16
@@ -77,7 +76,7 @@ def unwrap_functions(miasm_ctx: MiasmContext, target_function_addrs: list[int]) 
     mutated_func_addrs: list[int] = []
     for addr in target_function_addrs:
         LOGGER.debug("Resolving mutated code portion address for 0x%x..." % addr)
-        mutated_code_addr = unwrap_function(miasm_ctx, addr)
+        mutated_code_addr = resolve_mutated_code_address(miasm_ctx, addr)
         if mutated_code_addr == addr:
             raise Exception("Failure to unwrap function")
 
@@ -174,34 +173,18 @@ def __rebuild_simplified_binary_in_new_section(
         new_content[offset:offset + len(data)] = data
     unmut_section.content = memoryview(new_content)
 
-    # Find the section containing the original function
-    protected_function_addrs = func_addr_to_simplified_cfg.keys()
-    text_section = __section_from_virtual_address(pe_obj, next(iter(protected_function_addrs)))
-    assert text_section is not None
-
     # Redirect functions to their simplified versions
+    protected_function_addrs = func_addr_to_simplified_cfg.keys()
     unmut_jmp_patches: list[tuple[int, bytes]] = []
     for target_addr in protected_function_addrs:
         # Generate a single-block AsmCFG with a JMP to the simplified version
         simplified_func_addr = original_to_simplified[target_addr]
-        original_loc_str = f"loc_{target_addr:x}"
-        jmp_unmut_instr_str = f"{original_loc_str}:\nJMP 0x{simplified_func_addr:x}"
-        jmp_unmut_asmcfg = parse_asm.parse_txt(miasm_ctx.mdis.arch, miasm_ctx.mdis.attrib, jmp_unmut_instr_str,
-                                               miasm_ctx.mdis.loc_db)
+        unmut_jmp_patch = generate_code_redirect_patch(miasm_ctx, target_addr, simplified_func_addr)
+        unmut_jmp_patches.append(unmut_jmp_patch)
 
-        # Unpin loc_key if it's pinned
-        original_loc = miasm_ctx.loc_db.get_offset_location(target_addr)
-        if original_loc is not None:
-            miasm_ctx.loc_db.unset_location_offset(original_loc)
-
-        # Relocate the newly created block and generate machine code
-        original_loc = miasm_ctx.loc_db.get_name_location(original_loc_str)
-        miasm_ctx.loc_db.set_location_offset(original_loc, target_addr)
-        new_jmp_patches = asm_resolve_final(miasm_ctx.mdis.arch, jmp_unmut_asmcfg)
-
-        # Merge patches into the patch list
-        for patch in new_jmp_patches.items():
-            unmut_jmp_patches.append(patch)
+    # Find the section containing the original function
+    text_section = __section_from_virtual_address(pe_obj, next(iter(protected_function_addrs)))
+    assert text_section is not None
 
     # Apply patches
     text_section_base = pe_obj.imagebase + text_section.virtual_address
@@ -281,34 +264,18 @@ def __rebuild_simplified_binary_in_place(
         new_content[offset:offset + len(data)] = data
     themida_section.content = memoryview(new_content)
 
-    # Find the section containing the original function
-    protected_function_addrs = func_addr_to_simplified_cfg.keys()
-    text_section = __section_from_virtual_address(pe_obj, next(iter(protected_function_addrs)))
-    assert text_section is not None
-
     # Redirect functions to their simplified versions
+    protected_function_addrs = func_addr_to_simplified_cfg.keys()
     unmut_jmp_patches: list[tuple[int, bytes]] = []
     for target_addr in protected_function_addrs:
         # Generate a single-block AsmCFG with a JMP to the simplified version
         simplified_func_addr = original_to_simplified[target_addr]
-        original_loc_str = f"loc_{target_addr:x}"
-        jmp_unmut_instr_str = f"{original_loc_str}:\nJMP 0x{simplified_func_addr:x}"
-        jmp_unmut_asmcfg = parse_asm.parse_txt(miasm_ctx.mdis.arch, miasm_ctx.mdis.attrib, jmp_unmut_instr_str,
-                                               miasm_ctx.mdis.loc_db)
+        unmut_jmp_patch = generate_code_redirect_patch(miasm_ctx, target_addr, simplified_func_addr)
+        unmut_jmp_patches.append(unmut_jmp_patch)
 
-        # Unpin loc_key if it's pinned
-        original_loc = miasm_ctx.loc_db.get_offset_location(target_addr)
-        if original_loc is not None:
-            miasm_ctx.loc_db.unset_location_offset(original_loc)
-
-        # Relocate the newly created block and generate machine code
-        original_loc = miasm_ctx.loc_db.get_name_location(original_loc_str)
-        miasm_ctx.loc_db.set_location_offset(original_loc, target_addr)
-        new_jmp_patches = asm_resolve_final(miasm_ctx.mdis.arch, jmp_unmut_asmcfg)
-
-        # Merge patches into the patch list
-        for patch in new_jmp_patches.items():
-            unmut_jmp_patches.append(patch)
+    # Find the section containing the original function
+    text_section = __section_from_virtual_address(pe_obj, next(iter(protected_function_addrs)))
+    assert text_section is not None
 
     # Apply patches
     text_section_base = pe_obj.imagebase + text_section.virtual_address

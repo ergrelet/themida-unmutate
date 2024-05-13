@@ -1,12 +1,12 @@
 import miasm.expression.expression as m2_expr
 from miasm.ir.ir import IRCFG, Lifter
 from miasm.ir.symbexec import SymbolicExecutionEngine
-from themida_unmutate.logging import LOGGER
 
+from themida_unmutate.logging import LOGGER
 from themida_unmutate.miasm_utils import MiasmContext, expr_int_to_int
 
 
-def unwrap_function(miasm_ctx: MiasmContext, target_addr: int) -> int:
+def resolve_mutated_code_address(miasm_ctx: MiasmContext, target_addr: int) -> int:
     # Save `follow_call` value and set it to `True`
     saved_follow_call = miasm_ctx.mdis.follow_call
     miasm_ctx.mdis.follow_call = True
@@ -14,7 +14,6 @@ def unwrap_function(miasm_ctx: MiasmContext, target_addr: int) -> int:
     asmcfg = miasm_ctx.mdis.dis_multiblock(target_addr)
     # Restore `follow_call` value
     miasm_ctx.mdis.follow_call = saved_follow_call
-
     # Lift ASM to IR
     ircfg = miasm_ctx.lifter.new_ircfg_from_asmcfg(asmcfg)
 
