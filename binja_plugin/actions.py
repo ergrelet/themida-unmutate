@@ -3,7 +3,7 @@ from typing import Self
 from binaryninja import BinaryView  # type:ignore
 from binaryninja.log import Logger  # type:ignore
 from binaryninja.plugin import BackgroundTaskThread  # type:ignore
-from themida_unmutate.main import unwrap_functions
+from themida_unmutate.unwrapping import unwrap_functions
 from themida_unmutate.symbolic_execution import disassemble_and_simplify_functions
 
 from . import common, plugin

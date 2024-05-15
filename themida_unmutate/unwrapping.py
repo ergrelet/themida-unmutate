@@ -6,7 +6,24 @@ from themida_unmutate.logging import LOGGER
 from themida_unmutate.miasm_utils import MiasmContext, expr_int_to_int
 
 
-def resolve_mutated_code_address(miasm_ctx: MiasmContext, target_addr: int) -> int:
+def unwrap_functions(miasm_ctx: MiasmContext, target_function_addrs: list[int]) -> list[int]:
+    """
+    Resolve mutated function's addresses from original function addresses.
+    """
+    mutated_func_addrs: list[int] = []
+    for addr in target_function_addrs:
+        LOGGER.debug("Resolving mutated code portion address for 0x%x..." % addr)
+        mutated_code_addr = _resolve_mutated_code_address(miasm_ctx, addr)
+        if mutated_code_addr == addr:
+            raise Exception("Failure to unwrap function")
+
+        LOGGER.info("Function at 0x%x jumps to 0x%x" % (addr, mutated_code_addr))
+        mutated_func_addrs.append(mutated_code_addr)
+
+    return mutated_func_addrs
+
+
+def _resolve_mutated_code_address(miasm_ctx: MiasmContext, target_addr: int) -> int:
     # Save `follow_call` value and set it to `True`
     saved_follow_call = miasm_ctx.mdis.follow_call
     miasm_ctx.mdis.follow_call = True
