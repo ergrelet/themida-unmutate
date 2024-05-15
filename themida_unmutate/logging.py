@@ -2,7 +2,7 @@ import logging
 
 import lief
 
-LOGGER = logging.getLogger(__file__)
+logger = logging.getLogger(__file__)
 
 
 def setup_logger(verbose: bool) -> None:
@@ -13,14 +13,14 @@ def setup_logger(verbose: bool) -> None:
         log_level = logging.DEBUG
     else:
         log_level = logging.INFO
-    LOGGER.setLevel(log_level)
+    logger.setLevel(log_level)
 
     # Create a console handler with a higher log level
     stream_handler = logging.StreamHandler()
     stream_handler.setLevel(log_level)
     stream_handler.setFormatter(CustomFormatter())
 
-    LOGGER.addHandler(stream_handler)
+    logger.addHandler(stream_handler)
 
 
 class CustomFormatter(logging.Formatter):

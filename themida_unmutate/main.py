@@ -1,6 +1,6 @@
 from argparse import ArgumentParser, Namespace
 
-from themida_unmutate.logging import setup_logger, LOGGER
+from themida_unmutate.logging import setup_logger, logger
 from themida_unmutate.miasm_utils import MiasmContext
 from themida_unmutate.rebuilding import rebuild_simplified_binary
 from themida_unmutate.symbolic_execution import disassemble_and_simplify_functions
@@ -20,14 +20,14 @@ def entry_point() -> None:
     # Resolve mutated functions' addresses if needed
     protected_func_addrs = list(map(lambda addr: int(addr, 0), args.addresses))
     if not args.no_trampoline:
-        LOGGER.info("Resolving mutated's functions' addresses...")
+        logger.info("Resolving mutated's functions' addresses...")
         mutated_func_addrs = unwrap_functions(miasm_ctx, protected_func_addrs)
     else:
         # No trampolines to take care of, use target addresses directly
         mutated_func_addrs = protected_func_addrs
 
     # Disassemble mutated functions and simplify them
-    LOGGER.info("Deobfuscating mutated functions...")
+    logger.info("Deobfuscating mutated functions...")
     simplified_func_asmcfgs = disassemble_and_simplify_functions(miasm_ctx, mutated_func_addrs)
 
     # Map protected functions' addresses to their corresponding simplified `AsmCFG`
@@ -37,11 +37,11 @@ def entry_point() -> None:
     }
 
     # Rewrite the protected binary with simplified functions
-    LOGGER.info("Rebuilding binary file...")
+    logger.info("Rebuilding binary file...")
     rebuild_simplified_binary(miasm_ctx, func_addr_to_simplified_cfg, args.protected_binary, args.output,
                               args.reassemble_in_place)
 
-    LOGGER.info("Done! You can find your deobfuscated binary at '%s'" % args.output)
+    logger.info("Done! You can find your deobfuscated binary at '%s'" % args.output)
 
 
 def parse_arguments() -> Namespace:

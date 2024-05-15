@@ -5,7 +5,7 @@ import miasm.expression.expression as m2_expr
 from miasm.analysis.binary import Container
 from miasm.analysis.machine import Machine
 from miasm.core import parse_asm
-from miasm.core.asmblock import AsmCFG, disasmEngine, asm_resolve_final
+from miasm.core.asmblock import disasmEngine, asm_resolve_final
 from miasm.core.interval import interval
 from miasm.core.locationdb import LocationDB
 from miasm.ir.ir import Lifter

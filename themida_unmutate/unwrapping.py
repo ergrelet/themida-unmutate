@@ -2,7 +2,7 @@ import miasm.expression.expression as m2_expr
 from miasm.ir.ir import IRCFG, Lifter
 from miasm.ir.symbexec import SymbolicExecutionEngine
 
-from themida_unmutate.logging import LOGGER
+from themida_unmutate.logging import logger
 from themida_unmutate.miasm_utils import MiasmContext, expr_int_to_int
 
 
@@ -12,12 +12,12 @@ def unwrap_functions(miasm_ctx: MiasmContext, target_function_addrs: list[int]) 
     """
     mutated_func_addrs: list[int] = []
     for addr in target_function_addrs:
-        LOGGER.debug("Resolving mutated code portion address for 0x%x..." % addr)
+        logger.debug("Resolving mutated code portion address for 0x%x..." % addr)
         mutated_code_addr = _resolve_mutated_code_address(miasm_ctx, addr)
         if mutated_code_addr == addr:
             raise Exception("Failure to unwrap function")
 
-        LOGGER.info("Function at 0x%x jumps to 0x%x" % (addr, mutated_code_addr))
+        logger.info("Function at 0x%x jumps to 0x%x" % (addr, mutated_code_addr))
         mutated_func_addrs.append(mutated_code_addr)
 
     return mutated_func_addrs
@@ -46,7 +46,7 @@ def _resolve_mutated_portion_address(lifter: Lifter, ircfg: IRCFG, call_addr: in
 
     # First `cmp` -> eval to zero
     if not cur_expr.is_cond() or not cur_expr.cond.is_mem():
-        LOGGER.warning("Function doesn't behave as expected, considering it unmutated")
+        logger.warning("Function doesn't behave as expected, considering it unmutated")
         return call_addr
 
     # Value if condition is evaled zero
@@ -56,7 +56,7 @@ def _resolve_mutated_portion_address(lifter: Lifter, ircfg: IRCFG, call_addr: in
 
     # Second `cmp` -> eval to zero
     if not cur_expr.is_cond() or not cur_expr.cond.is_mem():
-        LOGGER.warning("Function doesn't behave as expected, considering it unmutated")
+        logger.warning("Function doesn't behave as expected, considering it unmutated")
         return call_addr
 
     # Value if condition is evaled zero
