@@ -9,10 +9,10 @@ A Python 3 tool to statically deobfuscate functions protected by Themida's mutat
 - Automatically resolve trampolines' destination addresses
 - Statically deobfuscate mutated functions
 - Rebuild fully working binaries
+- Binary Ninja integration
 
 ## Known Limitations
 
-- Doesn't support partially mutated functions
 - Doesn't support ARM64 binaries
 
 ## How To
@@ -47,3 +47,5 @@ options:
                         Output binary path
   -v, --verbose         Enable verbose logging
 ```
+
+You can also find a Binary Ninja plugin in the `binja_plugin` directory.
