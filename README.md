@@ -2,7 +2,7 @@
 
 [![GitHub release](https://img.shields.io/github/release/ergrelet/themida-unmutate.svg)](https://github.com/ergrelet/themida-unmutate/releases) [![Minimum Python version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/) ![CI status](https://github.com/ergrelet/themida-unmutate/actions/workflows/lint.yml/badge.svg?branch=main)
 
-A Python 3 tool to statically deobfuscate functions protected by Themida's mutation-based obfuscation.
+A Python 3 tool to statically deobfuscate functions protected by Themida 3.x's mutation-based obfuscation.
 
 ## Features
 
@@ -19,8 +19,7 @@ A Python 3 tool to statically deobfuscate functions protected by Themida's mutat
 
 ### Download
 
-You can either download the PyInstaller-generated executables from the "Releases"
-section or fetch the project with `git` and install it with `pip`:
+You can fetch the project with `git` and install it with `pip`:
 
 ```
 pip install git+https://github.com/ergrelet/themida-unmutate.git
