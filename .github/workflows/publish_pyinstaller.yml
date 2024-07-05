@@ -1,0 +1,47 @@
+name: Publish PyInstaller distribution to Github Artifacts
+
+on: [push]
+
+jobs:
+  check:
+    name: Check PyInstaller for Python ${{ matrix.python_version }} (${{ matrix.architecture }})
+    strategy:
+      fail-fast: false
+      matrix:
+        python_version: ["3.11"]
+        architecture: [x64, x86]
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python_version }}
+          architecture: ${{ matrix.architecture }}
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+
+      - name: Install Poetry
+        uses: SG60/setup-poetry@v1
+
+      - uses: TheMrMilchmann/setup-msvc-dev@v3
+        with:
+          arch: ${{ matrix.architecture }}
+
+      - name: Install Dependencies
+        run: poetry install
+
+      - name: Build PyInstaller package
+        run: poetry run pyinstaller themida-unmutate.spec
+
+      - name: "Upload PyInstaller Artifact"
+        uses: actions/upload-artifact@v3
+        with:
+          name: themida-unmutate-py${{ matrix.python_version }}-${{ matrix.architecture }}
+          path: dist/*.exe
+          retention-days: 3
