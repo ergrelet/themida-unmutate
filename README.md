@@ -2,7 +2,9 @@
 
 [![GitHub release](https://img.shields.io/github/release/ergrelet/themida-unmutate.svg)](https://github.com/ergrelet/themida-unmutate/releases) [![Minimum Python version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/) ![CI status](https://github.com/ergrelet/themida-unmutate/actions/workflows/lint.yml/badge.svg?branch=main)
 
-A Python 3 tool to statically deobfuscate functions protected by Themida 3.x's mutation-based obfuscation.
+A Python 3 tool to statically deobfuscate functions protected by Themida, WinLicense and Code Virtualizer 3.x's mutation-based obfuscation.  
+The tool has been **tested on Themida up to version 3.1.9**. It's expected to work on WinLicense and
+Code Virtualizer as well.
 
 ## Features
 
