@@ -3,7 +3,7 @@
   "name": "themida-unmutate-bn",
   "type": ["core"],
   "api": ["python3"],
-  "description": "Static deobfuscator for Themida, WinLicense and Code Virtualizer's mutation-based obfuscation.",
+  "description": "Static deobfuscator for Themida, WinLicense and Code Virtualizer 3.x's mutation-based obfuscation.",
   "longdescription": "",
   "license": {
     "name": "GPL-3.0-or-later",
