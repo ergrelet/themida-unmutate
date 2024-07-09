@@ -23,18 +23,18 @@ jobs:
           python-version: ${{ matrix.python_version }}
           architecture: ${{ matrix.architecture }}
 
-      - name: Install PyInstaller
-        run: pip install pyinstaller
-
-      - name: Install Poetry
-        uses: SG60/setup-poetry@v1
-
       - uses: TheMrMilchmann/setup-msvc-dev@v3
         with:
           arch: ${{ matrix.architecture }}
 
+      - name: Install Poetry
+        uses: SG60/setup-poetry@v1
+
       - name: Install Dependencies
         run: poetry install
+
+      - name: Install PyInstaller
+        run: poetry run pip install pyinstaller
 
       - name: Build PyInstaller package
         run: poetry run pyinstaller themida-unmutate.spec
