@@ -63,7 +63,18 @@ def _resolve_mutated_portion_address(lifter: Lifter, ircfg: IRCFG, call_addr: in
     symb.eval_updt_expr(m2_expr.ExprAssign(cur_expr.cond, m2_expr.ExprInt(0, cur_expr.cond.size)))
     target = cur_expr.src2
     cur_expr = symb.run_at(ircfg, target)
-    assert isinstance(cur_expr, m2_expr.ExprInt)
+    if not isinstance(cur_expr, m2_expr.ExprInt):
+        # If we're here, this might be a Themida 3.1.7+ trampoline, handle the additional JCC
+        if not cur_expr.is_cond() or not cur_expr.cond.is_mem():
+            logger.warning("Function doesn't behave as expected, considering it unmutated")
+            return call_addr
+        
+        symb.eval_updt_expr(m2_expr.ExprAssign(cur_expr.cond, m2_expr.ExprInt(0, cur_expr.cond.size)))
+        target = cur_expr.src2
+        cur_expr = symb.run_at(ircfg, target)
+        if not isinstance(cur_expr, m2_expr.ExprInt):
+            logger.warning("Function doesn't behave as expected, considering it unmutated")
+            return call_addr
 
     # This time we should have the real mutated function address
     return expr_int_to_int(cur_expr)
