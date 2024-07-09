@@ -68,7 +68,7 @@ def _resolve_mutated_portion_address(lifter: Lifter, ircfg: IRCFG, call_addr: in
         if not cur_expr.is_cond() or not cur_expr.cond.is_mem():
             logger.warning("Function doesn't behave as expected, considering it unmutated")
             return call_addr
-        
+
         symb.eval_updt_expr(m2_expr.ExprAssign(cur_expr.cond, m2_expr.ExprInt(0, cur_expr.cond.size)))
         target = cur_expr.src2
         cur_expr = symb.run_at(ircfg, target)
