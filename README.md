@@ -34,8 +34,8 @@ A standalone PyInstaller build is available for Windows in "Releases".
 Here's what the CLI looks like:
 
 ```
-themida-unmutate --help
-usage: themida-unmutate.cmd [-h] -a ADDRESSES [ADDRESSES ...] -o OUTPUT [-v] protected_binary
+$ themida-unmutate --help
+usage: themida-unmutate [-h] -a ADDRESSES [ADDRESSES ...] -o OUTPUT [--no-trampoline] [--reassemble-in-place] [-v] protected_binary
 
 Automatic deobfuscation tool for Themida's mutation-based protection
 
@@ -48,5 +48,8 @@ options:
                         Addresses of the functions to deobfuscate
   -o OUTPUT, --output OUTPUT
                         Output binary path
+  --no-trampoline       Disable function unwrapping
+  --reassemble-in-place
+                        Rewrite simplified code over the mutated coderather than in a new code section
   -v, --verbose         Enable verbose logging
 ```
