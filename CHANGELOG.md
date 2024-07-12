@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2024-07-13
+
+### Fixed
+
+- Fix in-place reassembly failing to find the right destination interval in many cases
+
 ## [0.1.1] - 2024-07-10
 
 ### Fixed
