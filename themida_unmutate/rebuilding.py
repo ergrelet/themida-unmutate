@@ -4,7 +4,8 @@ import lief
 from miasm.core.asmblock import AsmCFG, asm_resolve_final, bbl_simplifier
 from miasm.core.interval import interval
 
-from themida_unmutate.miasm_utils import MiasmContext, MiasmFunctionInterval, generate_code_redirect_patch
+from themida_unmutate.miasm_utils import (MiasmContext, MiasmFunctionInterval, generate_code_redirect_patch,
+                                          asm_resolve_final_in_place)
 
 NEW_SECTION_NAME = ".unmut"
 NEW_SECTION_MAX_SIZE = 2**16
@@ -148,36 +149,24 @@ def __rebuild_simplified_binary_in_place(
             func_addr_to_simplified_cfg.items():
         simplified_asmcfg, orignal_asmcfg_interval = val
 
-        # Unpin blocks to be able to relocate the CFG
-        head = simplified_asmcfg.heads()[0]
-        for asm_block in simplified_asmcfg.blocks:
-            miasm_ctx.loc_db.unset_location_offset(asm_block.loc_key)
-
-        # Start rewriting at the first part of the interval (i.e., at the start
-        # of the mutated code)
-        target_addr: int = orignal_asmcfg_interval.intervals[0][0]
-        # Unpin loc_key if it's pinned
-        original_loc = miasm_ctx.loc_db.get_offset_location(target_addr)
-        if original_loc is not None:
-            miasm_ctx.loc_db.unset_location_offset(original_loc)
-
-        # Relocate the function's entry block
-        miasm_ctx.loc_db.set_location_offset(head, target_addr)
-
         # Generate the simplified machine code
-        new_section_patches = asm_resolve_final(miasm_ctx.mdis.arch,
-                                                simplified_asmcfg,
-                                                dst_interval=orignal_asmcfg_interval)
+        new_section_patches = asm_resolve_final_in_place(miasm_ctx.loc_db,
+                                                         miasm_ctx.mdis.arch,
+                                                         simplified_asmcfg,
+                                                         dst_interval=orignal_asmcfg_interval)
 
         # Merge patches into the patch list
         for patch in new_section_patches.items():
             unmut_patches.append(patch)
 
         # Associate original addr to simplified addr
-        original_to_simplified[protected_func_addr] = min(new_section_patches.keys())
+        head = simplified_asmcfg.heads()[0]
+        head_addr = miasm_ctx.loc_db.get_location_offset(head)
+        original_to_simplified[protected_func_addr] = head_addr
 
     # Find Themida's section
-    themida_section = __section_from_virtual_address(pe_obj, target_addr)
+    mutated_func_addr = next(iter(original_to_simplified.values()))
+    themida_section = __section_from_virtual_address(pe_obj, mutated_func_addr)
     assert themida_section is not None
 
     # Overwrite Themida's section content
