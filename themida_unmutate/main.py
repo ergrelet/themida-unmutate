@@ -55,7 +55,7 @@ def parse_arguments() -> Namespace:
     parser.add_argument("--no-trampoline", action='store_true', help="Disable function unwrapping")
     parser.add_argument("--reassemble-in-place",
                         action='store_true',
-                        help="Rewrite simplified code over the mutated code"
+                        help="Rewrite simplified code over the mutated code "
                         "rather than in a new code section")
     parser.add_argument("-v", "--verbose", action='store_true', help="Enable verbose logging")
 

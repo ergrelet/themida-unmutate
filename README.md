@@ -50,6 +50,6 @@ options:
                         Output binary path
   --no-trampoline       Disable function unwrapping
   --reassemble-in-place
-                        Rewrite simplified code over the mutated coderather than in a new code section
+                        Rewrite simplified code over the mutated code rather than in a new code section
   -v, --verbose         Enable verbose logging
 ```
