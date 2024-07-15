@@ -30,13 +30,13 @@ AMD64_IP_REG = "RIP"
 MiasmIRAssignment = tuple[m2_expr.Expr, m2_expr.Expr]
 
 
-def disassemble_and_simplify_functions(miasm_ctx: MiasmContext,
-                                       mutated_func_addrs: list[int]) -> list[tuple[AsmCFG, MiasmFunctionInterval]]:
+def disassemble_and_simplify_functions(
+        miasm_ctx: MiasmContext, mutated_func_addrs: list[int]) -> list[tuple[int, AsmCFG, MiasmFunctionInterval]]:
     """
     Disassemble mutated functions, simplify their `AsmCFG` and return them.
     """
     # Iterate through functions, disassemble and simplify them
-    simplified_func_asmcfgs: list[tuple[AsmCFG, MiasmFunctionInterval]] = []
+    simplified_func_asmcfgs: list[tuple[int, AsmCFG, MiasmFunctionInterval]] = []
     for mutated_code_addr in mutated_func_addrs:
         logger.info("Simplifying function at 0x%x..." % mutated_code_addr)
 
@@ -210,7 +210,7 @@ def disassemble_and_simplify_functions(miasm_ctx: MiasmContext,
             logger.warning("Unsupported instruction or unmutated block found. "
                            "Block will be kept as is.")
 
-        simplified_func_asmcfgs.append((asm_cfg, original_func_interval))
+        simplified_func_asmcfgs.append((mutated_code_addr, asm_cfg, original_func_interval))
 
     return simplified_func_asmcfgs
 

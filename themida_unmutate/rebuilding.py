@@ -13,7 +13,7 @@ NEW_SECTION_MAX_SIZE = 2**16
 
 def rebuild_simplified_binary(
     miasm_ctx: MiasmContext,
-    func_addr_to_simplified_cfg: dict[int, tuple[AsmCFG, MiasmFunctionInterval]],
+    func_addr_to_simplified_cfg: dict[int, tuple[int, AsmCFG, MiasmFunctionInterval]],
     input_binary_path: str,
     output_binary_path: str,
     reassemble_in_place: bool,
@@ -35,7 +35,7 @@ def rebuild_simplified_binary(
 
 def __rebuild_simplified_binary_in_new_section(
     miasm_ctx: MiasmContext,
-    func_addr_to_simplified_cfg: dict[int, tuple[AsmCFG, MiasmFunctionInterval]],
+    func_addr_to_simplified_cfg: dict[int, tuple[int, AsmCFG, MiasmFunctionInterval]],
     input_binary_path: str,
     output_binary_path: str,
 ) -> None:
@@ -63,12 +63,12 @@ def __rebuild_simplified_binary_in_new_section(
     unmut_section_patches: list[tuple[int, bytes]] = []
     for protected_func_addr, val in \
             func_addr_to_simplified_cfg.items():
-        simplified_asmcfg, _ = val
+        original_code_addr, simplified_asmcfg, _ = val
         # Simplify CFG further (by merging basic blocks when possible)
         simplified_asmcfg = bbl_simplifier(simplified_asmcfg)
 
         # Unpin blocks to be able to relocate the whole CFG
-        head = simplified_asmcfg.heads()[0]
+        head = miasm_ctx.loc_db.get_offset_location(original_code_addr)
         for ir_block in simplified_asmcfg.blocks:
             miasm_ctx.loc_db.unset_location_offset(ir_block.loc_key)
 
@@ -129,7 +129,7 @@ def __rebuild_simplified_binary_in_new_section(
 
 def __rebuild_simplified_binary_in_place(
     miasm_ctx: MiasmContext,
-    func_addr_to_simplified_cfg: dict[int, tuple[AsmCFG, MiasmFunctionInterval]],
+    func_addr_to_simplified_cfg: dict[int, tuple[int, AsmCFG, MiasmFunctionInterval]],
     input_binary_path: str,
     output_binary_path: str,
 ) -> None:
@@ -147,7 +147,7 @@ def __rebuild_simplified_binary_in_place(
     unmut_patches: list[tuple[int, bytes]] = []
     for protected_func_addr, val in \
             func_addr_to_simplified_cfg.items():
-        simplified_asmcfg, orignal_asmcfg_interval = val
+        original_code_addr, simplified_asmcfg, orignal_asmcfg_interval = val
 
         # Generate the simplified machine code
         new_section_patches = asm_resolve_final_in_place(miasm_ctx.loc_db,
@@ -160,9 +160,7 @@ def __rebuild_simplified_binary_in_place(
             unmut_patches.append(patch)
 
         # Associate original addr to simplified addr
-        head = simplified_asmcfg.heads()[0]
-        head_addr = miasm_ctx.loc_db.get_location_offset(head)
-        original_to_simplified[protected_func_addr] = head_addr
+        original_to_simplified[protected_func_addr] = original_code_addr
 
     # Find Themida's section
     mutated_func_addr = next(iter(original_to_simplified.values()))
