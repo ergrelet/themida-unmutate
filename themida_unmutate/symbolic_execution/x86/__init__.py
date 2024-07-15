@@ -71,13 +71,6 @@ def disassemble_and_simplify_functions(
             if relevant_blk_count <= 2:
                 logger.debug(ir_block.assignblks[0].instr)
                 relocatable_instr = fix_rip_relative_instruction(asm_cfg, ir_block.assignblks[0].instr)
-                # Note(ergrelet): reset the instruction's additional info to avoid
-                # certain assembling issues where instruction prefixes are mixed
-                # in an illegal way.
-                relocatable_instr.additional_info = x86_arch.additional_info()
-                relocatable_instr.additional_info.g1.value = 0
-                relocatable_instr.additional_info.g2.value = 0
-
                 asm_block.lines[0] = relocatable_instr
                 continue
 
@@ -598,4 +591,15 @@ def fix_rip_relative_instruction(asmcfg: AsmCFG, instr: instruction) -> instruct
             fix_dict = {rip: rip + next_instr_addr - new_next_addr_card}
             instr.args[i] = arg.replace_expr(fix_dict)
 
+    # Note(ergrelet): reset the instruction's additional info to avoid
+    # certain assembling issues where instruction prefixes are mixed
+    # in an illegal way.
+    reset_additional_instruction_info(instr)
+
     return instr
+
+
+def reset_additional_instruction_info(instr: instruction) -> None:
+    instr.additional_info = x86_arch.additional_info()
+    instr.additional_info.g1.value = 0
+    instr.additional_info.g2.value = 0
