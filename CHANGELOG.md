@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add support for x86_32 binaries
+
 ## [0.1.2] - 2024-07-16
 
 ### Fixed

@@ -11,7 +11,16 @@ from miasm.ir.symbexec import SymbolicExecutionEngine
 from themida_unmutate.logging import logger
 from themida_unmutate.miasm_utils import MiasmContext, MiasmFunctionInterval, expr_int_to_int
 
+# AMD64
 AMD64_PTR_SIZE = 64
+AMD64_SLICES_MAPPING = {v: k for k, v in x86_arch.replace_regs64.items()}
+AMD64_SP_REG = "RSP"
+AMD64_IP_REG = "RIP"
+# X86
+X86_PTR_SIZE = 32
+X86_SLICES_MAPPING = {v: k for k, v in x86_arch.replace_regs32.items()}
+X86_SP_REG = "ESP"
+X86_IP_REG = "EIP"
 X86_BINARY_OPS_MAPPING = {
     "+": "ADD",
     "&": "AND",
@@ -23,9 +32,6 @@ X86_BINARY_OPS_MAPPING = {
     ">>>": "ROR",
     "<<<": "ROL",
 }
-AMD64_SLICES_MAPPING = {v: k for k, v in x86_arch.replace_regs64.items()}
-AMD64_SP_REG = "RSP"
-AMD64_IP_REG = "RIP"
 
 MiasmIRAssignment = tuple[m2_expr.Expr, m2_expr.Expr]
 
@@ -70,7 +76,7 @@ def disassemble_and_simplify_functions(
             # -> unmutated, no junk code -> no action needed -> keep first instruction as is
             if relevant_blk_count <= 2:
                 logger.debug(ir_block.assignblks[0].instr)
-                relocatable_instr = fix_rip_relative_instruction(asm_cfg, ir_block.assignblks[0].instr)
+                relocatable_instr = fix_rip_relative_instruction(miasm_ctx, asm_cfg, ir_block.assignblks[0].instr)
                 asm_block.lines[0] = relocatable_instr
                 continue
 
@@ -98,7 +104,7 @@ def disassemble_and_simplify_functions(
                     for a in assignblk_subset:
                         logger.debug(a.instr)
                         # Update block asm block
-                        relocatable_instr = fix_rip_relative_instruction(asm_cfg, a.instr)
+                        relocatable_instr = fix_rip_relative_instruction(miasm_ctx, asm_cfg, a.instr)
                         asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
                     block_simplified = True
                     break
@@ -119,36 +125,37 @@ def disassemble_and_simplify_functions(
                 # 1 assignment block: MOV, XCHG, n-ary operators
                 case 1:
                     ir_assignment = next(iter(modified_variables.items()))
-                    dst, value = normalize_ir_assigment(ir_assignment)
+                    dst, value = normalize_ir_assigment(miasm_ctx, ir_assignment)
                     match type(value):
                         case m2_expr.ExprId | m2_expr.ExprMem | m2_expr.ExprInt | m2_expr.ExprSlice:
                             # Assignation
                             # -> MOV
                             match type(dst):
                                 case m2_expr.ExprId | m2_expr.ExprMem | m2_expr.ExprSlice:
-                                    original_instr = handle_mov(miasm_ctx.mdis, dst, value)
+                                    original_instr = handle_mov(miasm_ctx, dst, value)
                                     if original_instr is not None:
                                         # Update block asm block
-                                        relocatable_instr = fix_rip_relative_instruction(asm_cfg, original_instr)
+                                        relocatable_instr = fix_rip_relative_instruction(
+                                            miasm_ctx, asm_cfg, original_instr)
                                         asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
                                         continue
 
                         case m2_expr.ExprOp:
                             # N-ary operation on native-size registers
                             # -> ADD/SUB/INC/DEC/AND/OR/XOR/NEG/NOT/ROL/ROR/SAR/SHL/SHR
-                            original_instr = handle_nary_op(miasm_ctx.mdis, dst, value)
+                            original_instr = handle_nary_op(miasm_ctx, dst, value)
                             if original_instr is not None:
                                 # Update block asm block
-                                relocatable_instr = fix_rip_relative_instruction(asm_cfg, original_instr)
+                                relocatable_instr = fix_rip_relative_instruction(miasm_ctx, asm_cfg, original_instr)
                                 asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
                                 continue
 
                         case m2_expr.ExprCompose:
                             # MOV, XCHG on single register or n-ary operation on lower-sized registers
-                            original_instr = handle_compose(miasm_ctx.mdis, dst, value)
+                            original_instr = handle_compose(miasm_ctx, dst, value)
                             if original_instr is not None:
                                 # Update block asm block
-                                relocatable_instr = fix_rip_relative_instruction(asm_cfg, original_instr)
+                                relocatable_instr = fix_rip_relative_instruction(miasm_ctx, asm_cfg, original_instr)
                                 asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
                                 continue
 
@@ -160,42 +167,42 @@ def disassemble_and_simplify_functions(
                     assignblk2 = next(modified_variables_iter)
 
                     # PUSH
-                    original_instr = handle_push(miasm_ctx.mdis, assignblk1, assignblk2)
+                    original_instr = handle_push(miasm_ctx, assignblk1, assignblk2)
                     if original_instr is not None:
                         # Update block asm block
-                        relocatable_instr = fix_rip_relative_instruction(asm_cfg, original_instr)
+                        relocatable_instr = fix_rip_relative_instruction(miasm_ctx, asm_cfg, original_instr)
                         asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
                         continue
                     # POP
-                    original_instr = handle_pop(miasm_ctx.mdis, assignblk1, assignblk2)
+                    original_instr = handle_pop(miasm_ctx, assignblk1, assignblk2)
                     if original_instr is not None:
                         # Update block asm block
-                        relocatable_instr = fix_rip_relative_instruction(asm_cfg, original_instr)
+                        relocatable_instr = fix_rip_relative_instruction(miasm_ctx, asm_cfg, original_instr)
                         asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
                         continue
                     # XCHG
-                    original_instr = handle_xchg(miasm_ctx.mdis, assignblk1, assignblk2)
+                    original_instr = handle_xchg(miasm_ctx, assignblk1, assignblk2)
                     if original_instr is not None:
                         # Update block asm block
-                        relocatable_instr = fix_rip_relative_instruction(asm_cfg, original_instr)
+                        relocatable_instr = fix_rip_relative_instruction(miasm_ctx, asm_cfg, original_instr)
                         asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
                         continue
 
                     # `SUB RSP, X`
-                    original_instr = handle_sub_rsp(miasm_ctx.mdis, modified_variables)
+                    original_instr = handle_sub_rsp(miasm_ctx, modified_variables)
                     if original_instr is not None:
                         # Update block asm block
-                        relocatable_instr = fix_rip_relative_instruction(asm_cfg, original_instr)
+                        relocatable_instr = fix_rip_relative_instruction(miasm_ctx, asm_cfg, original_instr)
                         asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
                         continue
 
                 # More than 2 assignment blocks
                 # -> `SUB RSP, X`
                 case _:
-                    original_instr = handle_sub_rsp(miasm_ctx.mdis, modified_variables)
+                    original_instr = handle_sub_rsp(miasm_ctx, modified_variables)
                     if original_instr is not None:
                         # Update block asm block
-                        relocatable_instr = fix_rip_relative_instruction(asm_cfg, original_instr)
+                        relocatable_instr = fix_rip_relative_instruction(miasm_ctx, asm_cfg, original_instr)
                         asm_block.lines = [relocatable_instr, asm_block.lines[-1]]
                         continue
 
@@ -218,7 +225,7 @@ def strip_sym_flags(symex: SymbolicExecutionEngine) -> None:
 
 
 def handle_mov(
-    mdis: disasmEngine,
+    miasm_ctx: MiasmContext,
     dst: m2_expr.Expr,
     value: Union[m2_expr.ExprId, m2_expr.ExprMem, m2_expr.ExprInt, m2_expr.ExprSlice],
     zero_extended: bool = False,
@@ -234,26 +241,27 @@ def handle_mov(
             original_instr_str = f"MOV {ir_to_asm_str(dst)}, {ir_to_asm_str(value)}"
     else:
         original_instr_str = f"MOV {ir_to_asm_str(dst)}, {ir_to_asm_str(value)}"
-    original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db, mdis.attrib)
+    original_instr = miasm_ctx.mdis.arch.fromstring(original_instr_str, miasm_ctx.mdis.loc_db, miasm_ctx.mdis.attrib)
     logger.debug(original_instr)
     return original_instr
 
 
-def handle_nary_op(mdis: disasmEngine, dst: m2_expr.Expr, op_expr: m2_expr.ExprOp) -> Optional[instruction]:
+def handle_nary_op(miasm_ctx: MiasmContext, dst: m2_expr.Expr, op_expr: m2_expr.ExprOp) -> Optional[instruction]:
     match op_expr.op:
     # ADD, SUB, INC, DEC, NEG (we treat this separately from other binary operations)
     # Note(ergrelet): SUB is lifted as ADD(VAL1, -VAL2), NEG is lifted as ADD(0, -VAL)
         case "+":
-            return handle_add_operation(mdis, dst, op_expr)
+            return handle_add_operation(miasm_ctx, dst, op_expr)
         # AND, OR, XOR, NOT, SAR, SHR, SHL, ROR, ROL
         # Note(ergrelet): NOT is lifted as XOR(VAL, -1)
         case "&" | "|" | "^" | "a>>" | ">>" | "<<" | ">>>" | "<<<":
-            return handle_binary_operation(mdis, dst, op_expr)
+            return handle_binary_operation(miasm_ctx, dst, op_expr)
         case _:
             return None
 
 
-def handle_compose(mdis: disasmEngine, dst: m2_expr.Expr, compose_expr: m2_expr.ExprCompose) -> Optional[instruction]:
+def handle_compose(miasm_ctx: MiasmContext, dst: m2_expr.Expr,
+                   compose_expr: m2_expr.ExprCompose) -> Optional[instruction]:
     inner_value_expr = compose_expr.args[0]
 
     # Match exprs of the form: '{RAX[0:32] + 0x1 0 32, 0x0 32 64}' (zero extension)
@@ -266,9 +274,9 @@ def handle_compose(mdis: disasmEngine, dst: m2_expr.Expr, compose_expr: m2_expr.
     if is_zero_extension or is_subregister_assign:
         match type(inner_value_expr):
             case m2_expr.ExprSlice:
-                return handle_mov(mdis, dst, inner_value_expr, is_zero_extension)
+                return handle_mov(miasm_ctx, dst, inner_value_expr, is_zero_extension)
             case m2_expr.ExprOp:
-                return handle_nary_op(mdis, dst, inner_value_expr)
+                return handle_nary_op(miasm_ctx, dst, inner_value_expr)
 
     # Handle XCHG cases where DST and SRC are subregisters of the same register
     # Match exprs of the form: '{RCX[8:16] 0 8, RCX[0:8] 8 16, RCX[16:64] 16 64}' (subregister swap)
@@ -279,12 +287,13 @@ def handle_compose(mdis: disasmEngine, dst: m2_expr.Expr, compose_expr: m2_expr.
         compose_lower_part, compose_mid_part, _ = compose_expr.args
         # 8-bit subregisters swap
         if compose_lower_part.size == compose_mid_part.size == 8:
-            return handle_xchg(mdis, (compose_lower_part, compose_mid_part), (compose_mid_part, compose_lower_part))
+            return handle_xchg(miasm_ctx, (compose_lower_part, compose_mid_part),
+                               (compose_mid_part, compose_lower_part))
 
     return None
 
 
-def handle_add_operation(mdis: disasmEngine, dst: m2_expr.Expr, op_expr: m2_expr.ExprOp) -> Optional[instruction]:
+def handle_add_operation(miasm_ctx: MiasmContext, dst: m2_expr.Expr, op_expr: m2_expr.ExprOp) -> Optional[instruction]:
     lhs = op_expr.args[0]
     rhs = op_expr.args[1]
 
@@ -294,14 +303,16 @@ def handle_add_operation(mdis: disasmEngine, dst: m2_expr.Expr, op_expr: m2_expr
             # DST = DST + (-RHS)
             if dst == lhs:
                 original_instr_str = f"SUB {ir_to_asm_str(dst)}, {ir_to_asm_str(rhs.args[0])}"
-                original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db, mdis.attrib)
+                original_instr = miasm_ctx.mdis.arch.fromstring(original_instr_str, miasm_ctx.mdis.loc_db,
+                                                                miasm_ctx.mdis.attrib)
                 logger.debug(original_instr)
                 return original_instr
             # DST = DST[0:XX] + (-RHS)
             if is_a_slice_of(lhs, dst):
                 dst = m2_expr.ExprSlice(dst, lhs.start, lhs.stop)
                 original_instr_str = f"SUB {ir_to_asm_str(dst)}, {ir_to_asm_str(rhs.args[0])}"
-                original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db, mdis.attrib)
+                original_instr = miasm_ctx.mdis.arch.fromstring(original_instr_str, miasm_ctx.mdis.loc_db,
+                                                                miasm_ctx.mdis.attrib)
                 logger.debug(original_instr)
                 return original_instr
 
@@ -311,24 +322,27 @@ def handle_add_operation(mdis: disasmEngine, dst: m2_expr.Expr, op_expr: m2_expr
             # DST = (-LHS) + DST
             if dst == rhs:
                 original_instr_str = f"SUB {ir_to_asm_str(dst)}, {ir_to_asm_str(lhs.args[0])}"
-                original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db, mdis.attrib)
+                original_instr = miasm_ctx.mdis.arch.fromstring(original_instr_str, miasm_ctx.mdis.loc_db,
+                                                                miasm_ctx.mdis.attrib)
                 logger.debug(original_instr)
                 return original_instr
             # DST = (-LHS) + DST[0:XX]
             if is_a_slice_of(rhs, dst):
                 dst = m2_expr.ExprSlice(dst, rhs.start, rhs.stop)
                 original_instr_str = f"SUB {ir_to_asm_str(dst)}, {ir_to_asm_str(lhs.args[0])}"
-                original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db, mdis.attrib)
+                original_instr = miasm_ctx.mdis.arch.fromstring(original_instr_str, miasm_ctx.mdis.loc_db,
+                                                                miasm_ctx.mdis.attrib)
                 logger.debug(original_instr)
                 return original_instr
 
     # TODO: handle NEG?
 
     # Add (regular binary operations)
-    return handle_binary_operation(mdis, dst, op_expr)
+    return handle_binary_operation(miasm_ctx, dst, op_expr)
 
 
-def handle_binary_operation(mdis: disasmEngine, dst: m2_expr.Expr, op_expr: m2_expr.ExprOp) -> Optional[instruction]:
+def handle_binary_operation(miasm_ctx: MiasmContext, dst: m2_expr.Expr,
+                            op_expr: m2_expr.ExprOp) -> Optional[instruction]:
     op_asm_str = X86_BINARY_OPS_MAPPING.get(op_expr.op)
     if op_asm_str is None:
         # Unsupported operation
@@ -340,81 +354,92 @@ def handle_binary_operation(mdis: disasmEngine, dst: m2_expr.Expr, op_expr: m2_e
         # DST = OP(DST, RHS)
         if dst == lhs:
             original_instr_str = f"{op_asm_str} {ir_to_asm_str(dst)}, {ir_to_asm_str(rhs)}"
-            original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db, mdis.attrib)
+            original_instr = miasm_ctx.mdis.arch.fromstring(original_instr_str, miasm_ctx.mdis.loc_db,
+                                                            miasm_ctx.mdis.attrib)
             logger.debug(original_instr)
             return original_instr
         # DST = OP(LHS, DST)
         if dst == rhs:
             original_instr_str = f"{op_asm_str} {ir_to_asm_str(dst)}, {ir_to_asm_str(lhs)}"
-            original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db, mdis.attrib)
+            original_instr = miasm_ctx.mdis.arch.fromstring(original_instr_str, miasm_ctx.mdis.loc_db,
+                                                            miasm_ctx.mdis.attrib)
             logger.debug(original_instr)
             return original_instr
         # DST = OP(DST[0:XX], RHS)
         if is_a_slice_of(lhs, dst):
             dst = m2_expr.ExprSlice(dst, lhs.start, lhs.stop)
             original_instr_str = f"{op_asm_str} {ir_to_asm_str(dst)}, {ir_to_asm_str(rhs)}"
-            original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db, mdis.attrib)
+            original_instr = miasm_ctx.mdis.arch.fromstring(original_instr_str, miasm_ctx.mdis.loc_db,
+                                                            miasm_ctx.mdis.attrib)
             logger.debug(original_instr)
             return original_instr
         # DST = OP(LHS, DST[0:XX])
         if is_a_slice_of(rhs, dst):
             dst = m2_expr.ExprSlice(dst, rhs.start, rhs.stop)
             original_instr_str = f"{op_asm_str} {ir_to_asm_str(dst)}, {ir_to_asm_str(lhs)}"
-            original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db, mdis.attrib)
+            original_instr = miasm_ctx.mdis.arch.fromstring(original_instr_str, miasm_ctx.mdis.loc_db,
+                                                            miasm_ctx.mdis.attrib)
             logger.debug(original_instr)
             return original_instr
 
     return None
 
 
-def handle_xchg(mdis: disasmEngine, ir_assignment1: MiasmIRAssignment,
+def handle_xchg(miasm_ctx: MiasmContext, ir_assignment1: MiasmIRAssignment,
                 ir_assignment2: MiasmIRAssignment) -> Optional[instruction]:
-    norm_assignment1 = normalize_ir_assigment(ir_assignment1)
-    norm_assignment2 = normalize_ir_assigment(ir_assignment2)
+    norm_assignment1 = normalize_ir_assigment(miasm_ctx, ir_assignment1)
+    norm_assignment2 = normalize_ir_assigment(miasm_ctx, ir_assignment2)
 
     # Handle most XCHG cases where DST and SRC are swapped and aren't part of
     # the same register
     if norm_assignment1[0] == norm_assignment2[1] and \
             norm_assignment2[0] == norm_assignment1[1]:
         original_instr_str = f"XCHG {ir_to_asm_str(norm_assignment2[0])}, {ir_to_asm_str(norm_assignment2[1])}"
-        original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db, mdis.attrib)
+        original_instr = miasm_ctx.mdis.arch.fromstring(original_instr_str, miasm_ctx.mdis.loc_db,
+                                                        miasm_ctx.mdis.attrib)
         logger.debug(original_instr)
         return original_instr
 
     return None
 
 
-def handle_push(mdis: disasmEngine, ir_assignment1: MiasmIRAssignment,
+def handle_push(miasm_ctx: MiasmContext, ir_assignment1: MiasmIRAssignment,
                 ir_assignment2: MiasmIRAssignment) -> Optional[instruction]:
-    rsp_decrement_op = m2_expr.ExprOp("+", m2_expr.ExprId(AMD64_SP_REG, AMD64_PTR_SIZE),
-                                      m2_expr.ExprInt(0xFFFFFFFFFFFFFFF8, AMD64_PTR_SIZE))
+    _, SP_REG, PTR_SIZE = get_constants_for_architecture(miasm_ctx.arch)
+
+    MAX_USIZE = 2**PTR_SIZE
+    rsp_decrement_op = m2_expr.ExprOp("+", m2_expr.ExprId(SP_REG, PTR_SIZE),
+                                      m2_expr.ExprInt(MAX_USIZE - (PTR_SIZE // 8), PTR_SIZE))
     is_rsp_decremented = ir_assignment1[1] == rsp_decrement_op
-    is_dst1_rsp = ir_assignment1[0].is_id() and ir_assignment1[0].name == AMD64_SP_REG
+    is_dst1_rsp = ir_assignment1[0].is_id() and ir_assignment1[0].name == SP_REG
     is_dst2_on_stack = ir_assignment2[0].is_mem() and \
                        ir_assignment2[0].ptr == rsp_decrement_op
 
     if is_dst1_rsp and is_rsp_decremented and is_dst2_on_stack:
         original_instr_str = f"PUSH {ir_to_asm_str(ir_assignment2[1])}"
-        original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db, mdis.attrib)
+        original_instr = miasm_ctx.mdis.arch.fromstring(original_instr_str, miasm_ctx.mdis.loc_db,
+                                                        miasm_ctx.mdis.attrib)
         logger.debug(original_instr)
         return original_instr
 
     return None
 
 
-def handle_pop(mdis: disasmEngine, ir_assignment1: MiasmIRAssignment,
+def handle_pop(miasm_ctx: MiasmContext, ir_assignment1: MiasmIRAssignment,
                ir_assignment2: MiasmIRAssignment) -> Optional[instruction]:
-    rsp_increment_op = m2_expr.ExprOp("+", m2_expr.ExprId(AMD64_SP_REG, AMD64_PTR_SIZE),
-                                      m2_expr.ExprInt(0x8, AMD64_PTR_SIZE))
+    _, SP_REG, PTR_SIZE = get_constants_for_architecture(miasm_ctx.arch)
+
+    rsp_increment_op = m2_expr.ExprOp("+", m2_expr.ExprId(SP_REG, PTR_SIZE), m2_expr.ExprInt(PTR_SIZE // 8, PTR_SIZE))
     is_rsp_incremented = ir_assignment2[1] == rsp_increment_op
     is_value1_on_stack = ir_assignment1[1].is_mem() and \
-                         ir_assignment1[1].ptr.is_id() and ir_assignment1[1].ptr.name == AMD64_SP_REG
+                         ir_assignment1[1].ptr.is_id() and ir_assignment1[1].ptr.name == SP_REG
     is_dst2_rsp = ir_assignment2[0].is_id() and \
-                  ir_assignment2[0].name == AMD64_SP_REG
+                  ir_assignment2[0].name == SP_REG
 
     if is_value1_on_stack and is_rsp_incremented and is_dst2_rsp:
         original_instr_str = f"POP {ir_to_asm_str(ir_assignment1[0])}"
-        original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db, mdis.attrib)
+        original_instr = miasm_ctx.mdis.arch.fromstring(original_instr_str, miasm_ctx.mdis.loc_db,
+                                                        miasm_ctx.mdis.attrib)
         logger.debug(original_instr)
         return original_instr
 
@@ -427,7 +452,8 @@ def handle_pop(mdis: disasmEngine, ir_assignment1: MiasmIRAssignment,
 # inserted junk code.
 # We thus have to differentiate legit PUSH-like instructions from junked
 # `SUB RSP, X` instructions.
-def handle_sub_rsp(mdis: disasmEngine, assign_blk: dict[m2_expr.Expr, m2_expr.Expr]) -> Optional[instruction]:
+def handle_sub_rsp(miasm_ctx: MiasmContext, assign_blk: dict[m2_expr.Expr, m2_expr.Expr]) -> Optional[instruction]:
+    _, SP_REG, _ = get_constants_for_architecture(miasm_ctx.arch)
 
     def is_sub_rsp_expr(expr: m2_expr.Expr) -> bool:
         """
@@ -441,7 +467,7 @@ def handle_sub_rsp(mdis: disasmEngine, assign_blk: dict[m2_expr.Expr, m2_expr.Ex
             return False
 
         # One of the operands must be RSP
-        rsp_in_expr = any(map(lambda arg: arg.is_id() and arg.name == AMD64_SP_REG, expr.args))
+        rsp_in_expr = any(map(lambda arg: arg.is_id() and arg.name == SP_REG, expr.args))
         # The other operand must be a negative integer
         neg_int_in_expr = any(map(lambda arg: arg.is_int() and expr_int_to_int(arg) < 0, expr.args))
 
@@ -456,7 +482,7 @@ def handle_sub_rsp(mdis: disasmEngine, assign_blk: dict[m2_expr.Expr, m2_expr.Ex
             return False
 
         # Destination must be RSP
-        dst_is_rsp = dst.name == AMD64_SP_REG
+        dst_is_rsp = dst.name == SP_REG
         return dst_is_rsp and is_sub_rsp_expr(src)
 
     # Check if a SUB operation is applied to RSP
@@ -482,8 +508,9 @@ def handle_sub_rsp(mdis: disasmEngine, assign_blk: dict[m2_expr.Expr, m2_expr.Ex
             # All allocated slots are used, must be a PUSH-like instruction
             return None
 
-        original_instr_str = f"SUB {AMD64_SP_REG}, {-allocated_window[1]}"
-        original_instr = mdis.arch.fromstring(original_instr_str, mdis.loc_db, mdis.attrib)
+        original_instr_str = f"SUB {SP_REG}, {-allocated_window[1]}"
+        original_instr = miasm_ctx.mdis.arch.fromstring(original_instr_str, miasm_ctx.mdis.loc_db,
+                                                        miasm_ctx.mdis.attrib)
         logger.debug(original_instr)
         return original_instr
 
@@ -518,13 +545,14 @@ def slice_ir_to_asm_str(slice_expr: m2_expr.ExprSlice) -> str:
             return str(slice_expr)
 
 
-def normalize_ir_assigment(ir_assignment: MiasmIRAssignment) -> MiasmIRAssignment:
+def normalize_ir_assigment(miasm_ctx: MiasmContext, ir_assignment: MiasmIRAssignment) -> MiasmIRAssignment:
     """
     Normalize IR assignments by transforming `ExprCompose`s in SRC into
     `ExprSlice`s in DST when appropriate.
     This allows us to properly detect assigments made to subregisters
     (e.g., `EAX`, `AX`, `AL`, `AH`).
     """
+    _, _, PTR_SIZE = get_constants_for_architecture(miasm_ctx.arch)
     dst, src = ir_assignment
 
     # Match ExprId(X) = ExprCompose(Y)
@@ -546,7 +574,7 @@ def normalize_ir_assigment(ir_assignment: MiasmIRAssignment) -> MiasmIRAssignmen
 
                 # If upper bits are zeroed out, it means mean we're dealing with
                 # a 32-bit subregister
-                upper_zero_bits = m2_expr.ExprInt(0, AMD64_PTR_SIZE // 2)
+                upper_zero_bits = m2_expr.ExprInt(0, PTR_SIZE // 2)
                 if compose_upper_part == upper_zero_bits:
                     # DST -> DST[0:32]
                     new_dst = m2_expr.ExprSlice(dst, 0, compose_lower_part.size)
@@ -579,15 +607,17 @@ def is_a_slice_of(slice_expr: m2_expr.Expr, expr: m2_expr.Expr) -> bool:
 
 
 # Fix RIP relative instructions to make them relocatable
-def fix_rip_relative_instruction(asmcfg: AsmCFG, instr: instruction) -> instruction:
-    rip = m2_expr.ExprId(AMD64_IP_REG, AMD64_PTR_SIZE)
+def fix_rip_relative_instruction(miasm_ctx: MiasmContext, asmcfg: AsmCFG, instr: instruction) -> instruction:
+    IP_REG, _, PTR_SIZE = get_constants_for_architecture(miasm_ctx.arch)
+
+    rip = m2_expr.ExprId(IP_REG, PTR_SIZE)
     # Note(ergrelet): see https://github.com/cea-sec/miasm/issues/1258#issuecomment-645640366
     # for more information on what the '_' symbol is used for.
-    new_next_addr_card = m2_expr.ExprLoc(asmcfg.loc_db.get_or_create_name_location('_'), AMD64_PTR_SIZE)
+    new_next_addr_card = m2_expr.ExprLoc(asmcfg.loc_db.get_or_create_name_location('_'), PTR_SIZE)
     for i, arg in enumerate(instr.args):
         if rip in arg:
             assert instr.offset is not None and instr.l is not None
-            next_instr_addr = m2_expr.ExprInt(instr.offset + instr.l, AMD64_PTR_SIZE)
+            next_instr_addr = m2_expr.ExprInt(instr.offset + instr.l, PTR_SIZE)
             fix_dict = {rip: rip + next_instr_addr - new_next_addr_card}
             instr.args[i] = arg.replace_expr(fix_dict)
 
@@ -603,3 +633,13 @@ def reset_additional_instruction_info(instr: instruction) -> None:
     instr.additional_info = x86_arch.additional_info()
     instr.additional_info.g1.value = 0
     instr.additional_info.g2.value = 0
+
+
+def get_constants_for_architecture(architecture: str) -> tuple[str, str, int]:
+    match architecture:
+        case "x86_32":
+            return X86_IP_REG, X86_SP_REG, X86_PTR_SIZE
+        case "x86_64":
+            return AMD64_IP_REG, AMD64_SP_REG, AMD64_PTR_SIZE
+        case _:
+            raise NotImplementedError("Unsupported architecture")

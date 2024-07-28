@@ -10,7 +10,7 @@ def disassemble_and_simplify_functions(
     Disassemble mutated functions, simplify their `AsmCFG` and return them.
     """
     match miasm_ctx.arch:
-        case "x86_64":
+        case "x86_64" | "x86_32":
             return symex_x86.disassemble_and_simplify_functions(miasm_ctx, mutated_func_addrs)
 
         case _:

@@ -17,7 +17,7 @@ A Binary Ninja plugin is also available [here](https://github.com/ergrelet/themi
 
 ## Known Limitations
 
-- Only supports x86_64 binaries
+- Doesn't support ARM64 binaries
 
 ## How to Download
 
