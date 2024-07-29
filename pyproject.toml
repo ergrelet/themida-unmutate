@@ -9,7 +9,7 @@ packages = [{include = "themida_unmutate"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
-lief = "^0.13.2"
+lief = "^0.15.1"
 miasm = "^0.1.5"
 
 

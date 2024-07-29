@@ -50,9 +50,9 @@ def __rebuild_simplified_binary_in_new_section(
 
     # Create a new code section
     unmut_section = lief.PE.Section([0] * NEW_SECTION_MAX_SIZE, NEW_SECTION_NAME,
-                                    lief.PE.SECTION_CHARACTERISTICS.CNT_CODE.value
-                                    | lief.PE.SECTION_CHARACTERISTICS.MEM_READ.value
-                                    | lief.PE.SECTION_CHARACTERISTICS.MEM_EXECUTE.value)
+                                    lief.PE.Section.CHARACTERISTICS.CNT_CODE.value
+                                    | lief.PE.Section.CHARACTERISTICS.MEM_READ.value
+                                    | lief.PE.Section.CHARACTERISTICS.MEM_EXECUTE.value)
     pe_obj.add_section(unmut_section)
     unmut_section = pe_obj.get_section(NEW_SECTION_NAME)
     unmut_section_base = pe_obj.imagebase + unmut_section.virtual_address
