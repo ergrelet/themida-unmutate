@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "themida-unmutate"
-version = "0.2.0"
+version = "0.2.1"
 description = "Static deobfuscator for Themida's mutation-based obfuscation."
 authors = ["ergrelet <ergrelet@users.noreply.github.com>"]
 license = "GPL-3.0-or-later"
